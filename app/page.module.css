@@ -491,6 +491,11 @@
   position: relative;
 }
 
+.thumbnailWrapperActive .thumbnail {
+  border-color: var(--ink-red);
+  box-shadow: 0 0 0 2px var(--ink-red), 4px 4px 12px rgba(184, 74, 60, 0.3);
+}
+
 .thumbnail {
   position: relative;
   width: 110px;
@@ -810,6 +815,58 @@
   font-weight: 700;
   letter-spacing: 0.1em;
   color: var(--ink-red);
+}
+
+.lightboxCuts {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--ink-black);
+  border-top: 1px solid rgba(139, 115, 85, 0.3);
+}
+
+.lightboxCutBtn {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px dashed var(--paper-brown);
+  color: var(--paper-brown);
+  font-family: var(--font-mono), 'Courier New', monospace;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lightboxCutBtn:hover:not(:disabled) {
+  border-style: solid;
+  background: rgba(184, 74, 60, 0.2);
+  color: var(--paper-cream);
+  border-color: var(--ink-red);
+}
+
+.lightboxCutBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.lightboxCutBtnActive {
+  background: var(--ink-red);
+  border-color: var(--ink-red);
+  border-style: solid;
+  color: var(--paper-cream);
+}
+
+.lightboxCutBtnActive:hover:not(:disabled) {
+  background: var(--accent-stamp);
+  border-color: var(--accent-stamp);
+}
+
+.lightboxCutDivider {
+  color: var(--paper-brown);
+  opacity: 0.4;
 }
 
 .lightboxHint {

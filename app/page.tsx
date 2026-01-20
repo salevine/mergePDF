@@ -54,6 +54,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragCounterRef = useRef(0)
+  const thumbnailRefs = useRef<Map<number, HTMLDivElement>>(new Map())
 
   const MAX_FILES = 5
   const MAX_CUTS = 4
@@ -328,6 +329,15 @@ export default function Home() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [viewerPage, splitFile])
+
+  // Scroll thumbnail into view when navigating in lightbox
+  useEffect(() => {
+    if (viewerPage === null) return
+    const thumbnailEl = thumbnailRefs.current.get(viewerPage)
+    if (thumbnailEl) {
+      thumbnailEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+    }
+  }, [viewerPage])
 
   // SHARED DRAG HANDLERS
   const handleDragEnter = (e: React.DragEvent) => {
@@ -636,7 +646,15 @@ export default function Home() {
                     const partNum = getPartForPage(thumb.pageNum)
 
                     return (
-                      <div key={thumb.pageNum} className={styles.thumbnailWrapper}>
+                      <div
+                        key={thumb.pageNum}
+                        className={`${styles.thumbnailWrapper} ${
+                          viewerPage === thumb.pageNum ? styles.thumbnailWrapperActive : ''
+                        }`}
+                        ref={(el) => {
+                          if (el) thumbnailRefs.current.set(thumb.pageNum, el)
+                        }}
+                      >
                         <motion.div
                           className={`${styles.thumbnail} ${
                             cutPoints.length > 0 ? styles[`part${partNum}`] || '' : ''
@@ -834,9 +852,44 @@ export default function Home() {
                   </button>
                 </div>
 
+                {/* Cut Controls */}
+                <div className={styles.lightboxCuts}>
+                  <button
+                    className={`${styles.lightboxCutBtn} ${
+                      cutPoints.includes(viewerPage - 1) ? styles.lightboxCutBtnActive : ''
+                    }`}
+                    onClick={() => toggleCutPoint(viewerPage - 1)}
+                    disabled={viewerPage <= 1}
+                    title={
+                      cutPoints.includes(viewerPage - 1)
+                        ? `Remove cut before page ${viewerPage}`
+                        : `Add cut before page ${viewerPage}`
+                    }
+                  >
+                    {cutPoints.includes(viewerPage - 1) ? '✂ REMOVE' : '✂ CUT'} BEFORE
+                  </button>
+
+                  <span className={styles.lightboxCutDivider}>|</span>
+
+                  <button
+                    className={`${styles.lightboxCutBtn} ${
+                      cutPoints.includes(viewerPage) ? styles.lightboxCutBtnActive : ''
+                    }`}
+                    onClick={() => toggleCutPoint(viewerPage)}
+                    disabled={viewerPage >= splitFile.pageCount}
+                    title={
+                      cutPoints.includes(viewerPage)
+                        ? `Remove cut after page ${viewerPage}`
+                        : `Add cut after page ${viewerPage}`
+                    }
+                  >
+                    {cutPoints.includes(viewerPage) ? '✂ REMOVE' : '✂ CUT'} AFTER
+                  </button>
+                </div>
+
                 {/* Keyboard hint */}
                 <div className={styles.lightboxHint}>
-                  USE ARROW KEYS TO NAVIGATE • ESC TO CLOSE
+                  ARROWS TO NAVIGATE • ESC TO CLOSE
                 </div>
               </motion.div>
             </motion.div>
