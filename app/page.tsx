@@ -804,18 +804,12 @@ export default function Home() {
 
                 {/* Image Container */}
                 <div className={styles.lightboxImageContainer}>
-                  <AnimatePresence mode="wait">
-                    <motion.img
-                      key={viewerPage}
-                      src={splitFile.thumbnails[viewerPage - 1]?.dataUrl}
-                      alt={`Page ${viewerPage}`}
-                      className={styles.lightboxImage}
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -20 }}
-                      transition={{ duration: 0.2 }}
-                    />
-                  </AnimatePresence>
+                  <img
+                    key={viewerPage}
+                    src={splitFile.thumbnails[viewerPage - 1]?.dataUrl}
+                    alt={`Page ${viewerPage}`}
+                    className={styles.lightboxImage}
+                  />
                 </div>
 
                 {/* Navigation */}
