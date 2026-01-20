@@ -49,6 +49,61 @@
   text-transform: uppercase;
 }
 
+/* Mode Toggle */
+.modeToggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.5rem;
+  border: 2px solid var(--paper-dark);
+  background: var(--paper-manila);
+}
+
+.modeButton {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.875rem 1.5rem;
+  background: transparent;
+  border: none;
+  font-family: var(--font-mono), 'Courier New', monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--paper-brown);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.modeButton:first-child {
+  border-right: 1px solid var(--paper-kraft);
+}
+
+.modeButton:last-child {
+  border-left: 1px solid var(--paper-kraft);
+}
+
+.modeButtonActive {
+  background: var(--ink-black);
+  color: var(--paper-cream);
+}
+
+.modeButtonActive .modeIcon {
+  color: var(--ink-red);
+}
+
+.modeButton:not(.modeButtonActive):hover {
+  background: var(--paper-kraft);
+  color: var(--ink-black);
+}
+
+.modeIcon {
+  font-size: 1rem;
+  transition: color 0.2s ease;
+}
+
 /* Drop Zone */
 .dropZone {
   position: relative;
@@ -365,6 +420,189 @@
 .mergeButtonIcon {
   color: var(--ink-red);
   font-size: 1rem;
+}
+
+/* Split Mode - Remove File Button */
+.removeFileBtn {
+  background: transparent;
+  border: 1px solid var(--paper-brown);
+  padding: 0.25rem 0.75rem;
+  font-family: var(--font-mono), 'Courier New', monospace;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--paper-brown);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.removeFileBtn:hover {
+  background: var(--ink-red);
+  border-color: var(--ink-red);
+  color: var(--paper-cream);
+}
+
+/* Split Mode - Page List */
+.pageList {
+  display: flex;
+  flex-direction: column;
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--paper-kraft);
+  background: white;
+}
+
+.pageItem {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--paper-manila);
+}
+
+.pageItem:last-child {
+  border-bottom: none;
+}
+
+.pageNumber {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--paper-brown);
+  min-width: 1.5rem;
+}
+
+.pageLabel {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink-black);
+  letter-spacing: 0.05em;
+}
+
+.pageBar {
+  flex: 1;
+  height: 4px;
+  background: var(--paper-manila);
+  margin-left: auto;
+}
+
+/* Split Mode - Cut Points */
+.cutPoint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  background: var(--paper-manila);
+  border: none;
+  border-top: 1px dashed var(--paper-kraft);
+  border-bottom: 1px dashed var(--paper-kraft);
+  font-family: var(--font-mono), 'Courier New', monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--paper-brown);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.cutPoint:hover {
+  background: var(--paper-kraft);
+  color: var(--ink-black);
+}
+
+.cutPointActive {
+  background: var(--ink-red);
+  border-color: var(--ink-red);
+  color: var(--paper-cream);
+}
+
+.cutPointActive:hover {
+  background: var(--accent-stamp);
+  color: var(--paper-cream);
+}
+
+.cutIcon {
+  font-size: 0.9rem;
+}
+
+.cutLabel {
+  font-size: 0.6rem;
+  opacity: 0.9;
+}
+
+/* Split Mode - Summary */
+.splitSummary {
+  margin-top: 1.5rem;
+}
+
+.splitParts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.partBadge {
+  display: inline-block;
+  padding: 0.5rem 0.75rem;
+  background: var(--paper-manila);
+  border: 1px solid var(--paper-kraft);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--ink-black);
+}
+
+/* Split Button */
+.splitButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 1.25rem 2rem;
+  background: var(--ink-red);
+  border: none;
+  color: var(--paper-cream);
+  font-family: var(--font-mono), 'Courier New', monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.splitButton::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+.splitButton:hover {
+  background: var(--accent-stamp);
+}
+
+.splitButton:active {
+  background: var(--ink-red);
+}
+
+.splitButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.splitButtonIcon {
+  font-size: 1.1rem;
 }
 
 /* Merging State */

@@ -5,6 +5,8 @@ import { PDFDocument } from 'pdf-lib'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import styles from './page.module.css'
 
+type Mode = 'merge' | 'split'
+
 interface PDFFile {
   id: string
   file: File
@@ -12,15 +14,33 @@ interface PDFFile {
   pageCount: number | null
 }
 
+interface SplitFile {
+  file: File
+  name: string
+  pageCount: number
+}
+
 export default function Home() {
+  // Mode state
+  const [mode, setMode] = useState<Mode>('merge')
+
+  // Merge mode state
   const [files, setFiles] = useState<PDFFile[]>([])
-  const [isDragging, setIsDragging] = useState(false)
   const [isMerging, setIsMerging] = useState(false)
+
+  // Split mode state
+  const [splitFile, setSplitFile] = useState<SplitFile | null>(null)
+  const [cutPoints, setCutPoints] = useState<number[]>([])
+  const [isSplitting, setIsSplitting] = useState(false)
+
+  // Shared state
+  const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragCounterRef = useRef(0)
 
   const MAX_FILES = 5
+  const MAX_CUTS = 4 // 4 cuts = 5 PDFs max
 
   const getPageCount = async (file: File): Promise<number | null> => {
     try {
@@ -32,6 +52,16 @@ export default function Home() {
     }
   }
 
+  // Reset when switching modes
+  const handleModeChange = (newMode: Mode) => {
+    setMode(newMode)
+    setError(null)
+    setFiles([])
+    setSplitFile(null)
+    setCutPoints([])
+  }
+
+  // MERGE MODE FUNCTIONS
   const addFiles = useCallback(async (newFiles: FileList | File[]) => {
     setError(null)
     const pdfFiles = Array.from(newFiles).filter(
@@ -95,17 +125,127 @@ export default function Home() {
       document.body.removeChild(link)
       URL.revokeObjectURL(url)
 
-      // Reset after successful merge
       setTimeout(() => {
         setFiles([])
         setIsMerging(false)
       }, 1000)
-    } catch (err) {
+    } catch {
       setError('Failed to merge PDFs. Some files may be corrupted or encrypted.')
       setIsMerging(false)
     }
   }, [files])
 
+  // SPLIT MODE FUNCTIONS
+  const addSplitFile = useCallback(async (newFiles: FileList | File[]) => {
+    setError(null)
+    const pdfFiles = Array.from(newFiles).filter(
+      (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+    )
+
+    if (pdfFiles.length === 0) {
+      setError('Only PDF files are accepted')
+      return
+    }
+
+    const file = pdfFiles[0]
+    const pageCount = await getPageCount(file)
+
+    if (pageCount === null) {
+      setError('Could not read PDF. File may be corrupted or encrypted.')
+      return
+    }
+
+    if (pageCount < 2) {
+      setError('PDF must have at least 2 pages to split')
+      return
+    }
+
+    setSplitFile({ file, name: file.name, pageCount })
+    setCutPoints([])
+  }, [])
+
+  const toggleCutPoint = (afterPage: number) => {
+    setCutPoints((prev) => {
+      if (prev.includes(afterPage)) {
+        return prev.filter((p) => p !== afterPage)
+      }
+      if (prev.length >= MAX_CUTS) {
+        setError(`Maximum ${MAX_CUTS} cut points (${MAX_CUTS + 1} parts)`)
+        return prev
+      }
+      setError(null)
+      return [...prev, afterPage].sort((a, b) => a - b)
+    })
+  }
+
+  const splitPDF = useCallback(async () => {
+    if (!splitFile || cutPoints.length === 0) return
+
+    setIsSplitting(true)
+    setError(null)
+
+    try {
+      const arrayBuffer = await splitFile.file.arrayBuffer()
+      const sourcePdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true })
+
+      // Calculate page ranges based on cut points
+      const ranges: [number, number][] = []
+      let start = 0
+      for (const cut of cutPoints) {
+        ranges.push([start, cut])
+        start = cut
+      }
+      ranges.push([start, splitFile.pageCount])
+
+      // Create and download each part
+      const baseName = splitFile.name.replace(/\.pdf$/i, '')
+
+      for (let i = 0; i < ranges.length; i++) {
+        const [rangeStart, rangeEnd] = ranges[i]
+        const newPdf = await PDFDocument.create()
+        const pageIndices = Array.from(
+          { length: rangeEnd - rangeStart },
+          (_, idx) => rangeStart + idx
+        )
+        const pages = await newPdf.copyPages(sourcePdf, pageIndices)
+        pages.forEach((page) => newPdf.addPage(page))
+
+        const pdfBytes = await newPdf.save()
+        const blob = new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' })
+        const url = URL.createObjectURL(blob)
+
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `${baseName}-part${i + 1}.pdf`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+
+        // Small delay between downloads
+        if (i < ranges.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 300))
+        }
+      }
+
+      setTimeout(() => {
+        setSplitFile(null)
+        setCutPoints([])
+        setIsSplitting(false)
+      }, 1000)
+    } catch {
+      setError('Failed to split PDF. File may be corrupted or encrypted.')
+      setIsSplitting(false)
+    }
+  }, [splitFile, cutPoints])
+
+  const removeSplitFile = () => {
+    setSplitFile(null)
+    setCutPoints([])
+    setError(null)
+  }
+
+  // SHARED DRAG HANDLERS
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -135,24 +275,38 @@ export default function Home() {
     setIsDragging(false)
     dragCounterRef.current = 0
 
-    if (files.length >= MAX_FILES) {
-      setError('Maximum 5 files allowed')
-      return
-    }
-
-    if (e.dataTransfer.files?.length) {
-      addFiles(e.dataTransfer.files)
+    if (mode === 'merge') {
+      if (files.length >= MAX_FILES) {
+        setError('Maximum 5 files allowed')
+        return
+      }
+      if (e.dataTransfer.files?.length) {
+        addFiles(e.dataTransfer.files)
+      }
+    } else {
+      if (splitFile) {
+        setError('Remove current file first')
+        return
+      }
+      if (e.dataTransfer.files?.length) {
+        addSplitFile(e.dataTransfer.files)
+      }
     }
   }
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) {
-      addFiles(e.target.files)
+      if (mode === 'merge') {
+        addFiles(e.target.files)
+      } else {
+        addSplitFile(e.target.files)
+      }
     }
     e.target.value = ''
   }
 
   const totalPages = files.reduce((sum, f) => sum + (f.pageCount || 0), 0)
+  const isDropDisabled = mode === 'merge' ? files.length >= MAX_FILES : !!splitFile
 
   return (
     <main className={styles.main}>
@@ -174,53 +328,85 @@ export default function Home() {
             animate={{ opacity: 1 }}
             transition={{ delay: 0.3, duration: 0.6 }}
           >
-            PDF MERGER — NO UPLOADS — NO WATERMARKS
+            PDF TOOLS — NO UPLOADS — NO WATERMARKS
           </motion.p>
         </header>
+
+        {/* Mode Toggle */}
+        <motion.div
+          className={styles.modeToggle}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4, duration: 0.5 }}
+        >
+          <button
+            className={`${styles.modeButton} ${mode === 'merge' ? styles.modeButtonActive : ''}`}
+            onClick={() => handleModeChange('merge')}
+          >
+            <span className={styles.modeIcon}>&#10697;</span>
+            MERGE
+          </button>
+          <button
+            className={`${styles.modeButton} ${mode === 'split' ? styles.modeButtonActive : ''}`}
+            onClick={() => handleModeChange('split')}
+          >
+            <span className={styles.modeIcon}>&#9986;</span>
+            SPLIT
+          </button>
+        </motion.div>
 
         {/* Drop Zone */}
         <motion.div
           className={`${styles.dropZone} ${isDragging ? styles.dropZoneActive : ''} ${
-            files.length >= MAX_FILES ? styles.dropZoneFull : ''
+            isDropDisabled ? styles.dropZoneFull : ''
           }`}
           onDragEnter={handleDragEnter}
           onDragLeave={handleDragLeave}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
-          onClick={() => files.length < MAX_FILES && fileInputRef.current?.click()}
+          onClick={() => !isDropDisabled && fileInputRef.current?.click()}
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.2, duration: 0.5 }}
+          key={mode}
         >
           <input
             ref={fileInputRef}
             type="file"
             accept=".pdf,application/pdf"
-            multiple
+            multiple={mode === 'merge'}
             onChange={handleFileInput}
             className={styles.fileInput}
-            disabled={files.length >= MAX_FILES}
+            disabled={isDropDisabled}
           />
 
           <div className={styles.dropContent}>
             <div className={styles.dropIcon}>
-              {files.length >= MAX_FILES ? (
+              {isDropDisabled ? (
                 <span>&#10003;</span>
               ) : isDragging ? (
                 <span className={styles.dropIconActive}>&#8675;</span>
-              ) : (
+              ) : mode === 'merge' ? (
                 <span>&#9744;</span>
+              ) : (
+                <span>&#9986;</span>
               )}
             </div>
             <p className={styles.dropText}>
-              {files.length >= MAX_FILES
-                ? 'MAXIMUM FILES REACHED'
+              {isDropDisabled
+                ? mode === 'merge' ? 'MAXIMUM FILES REACHED' : 'FILE LOADED'
                 : isDragging
                 ? 'RELEASE TO ADD'
-                : 'DROP PDFs HERE OR CLICK'}
+                : mode === 'merge'
+                ? 'DROP PDFs HERE OR CLICK'
+                : 'DROP A PDF TO SPLIT'}
             </p>
             <p className={styles.dropSubtext}>
-              {files.length}/{MAX_FILES} FILES — REORDER THEN MERGE
+              {mode === 'merge'
+                ? `${files.length}/${MAX_FILES} FILES — REORDER THEN MERGE`
+                : splitFile
+                ? `${splitFile.pageCount} PAGES — CLICK TO ADD CUT POINTS`
+                : 'SINGLE PDF — UP TO 5 PARTS'}
             </p>
           </div>
 
@@ -245,9 +431,9 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* File List */}
+        {/* MERGE MODE: File List */}
         <AnimatePresence>
-          {files.length > 0 && (
+          {mode === 'merge' && files.length > 0 && (
             <motion.div
               className={styles.fileSection}
               initial={{ opacity: 0 }}
@@ -302,7 +488,6 @@ export default function Home() {
                 ))}
               </Reorder.Group>
 
-              {/* Merge Button */}
               {files.length >= 2 && (
                 <motion.button
                   className={styles.mergeButton}
@@ -313,7 +498,7 @@ export default function Home() {
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                 >
-                  <span className={styles.mergeButtonIcon}>&#9638;</span>
+                  <span className={styles.mergeButtonIcon}>&#10697;</span>
                   MERGE {files.length} FILES INTO ONE
                 </motion.button>
               )}
@@ -321,9 +506,109 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* Merging Status */}
+        {/* SPLIT MODE: Page List with Cut Points */}
         <AnimatePresence>
-          {isMerging && (
+          {mode === 'split' && splitFile && (
+            <motion.div
+              className={styles.fileSection}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <div className={styles.fileSectionHeader}>
+                <span>{splitFile.name}</span>
+                <button className={styles.removeFileBtn} onClick={removeSplitFile}>
+                  REMOVE
+                </button>
+              </div>
+
+              <div className={styles.pageList}>
+                {Array.from({ length: splitFile.pageCount }, (_, i) => (
+                  <div key={i}>
+                    {/* Page item */}
+                    <motion.div
+                      className={styles.pageItem}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.02 }}
+                    >
+                      <div className={styles.pageNumber}>
+                        {String(i + 1).padStart(2, '0')}
+                      </div>
+                      <div className={styles.pageLabel}>PAGE {i + 1}</div>
+                      <div className={styles.pageBar} />
+                    </motion.div>
+
+                    {/* Cut point button (between pages, not after last page) */}
+                    {i < splitFile.pageCount - 1 && (
+                      <motion.button
+                        className={`${styles.cutPoint} ${
+                          cutPoints.includes(i + 1) ? styles.cutPointActive : ''
+                        }`}
+                        onClick={() => toggleCutPoint(i + 1)}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: i * 0.02 + 0.01 }}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                      >
+                        <span className={styles.cutIcon}>
+                          {cutPoints.includes(i + 1) ? '✂' : '+ CUT HERE'}
+                        </span>
+                        {cutPoints.includes(i + 1) && (
+                          <span className={styles.cutLabel}>
+                            SPLIT AFTER PAGE {i + 1}
+                          </span>
+                        )}
+                      </motion.button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Split summary and button */}
+              {cutPoints.length > 0 && (
+                <motion.div
+                  className={styles.splitSummary}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                >
+                  <div className={styles.splitParts}>
+                    {(() => {
+                      const ranges: string[] = []
+                      let start = 1
+                      for (const cut of cutPoints) {
+                        ranges.push(`${start}–${cut}`)
+                        start = cut + 1
+                      }
+                      ranges.push(`${start}–${splitFile.pageCount}`)
+                      return ranges.map((range, idx) => (
+                        <span key={idx} className={styles.partBadge}>
+                          PART {idx + 1}: {range}
+                        </span>
+                      ))
+                    })()}
+                  </div>
+
+                  <motion.button
+                    className={styles.splitButton}
+                    onClick={splitPDF}
+                    disabled={isSplitting}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <span className={styles.splitButtonIcon}>&#9986;</span>
+                    SPLIT INTO {cutPoints.length + 1} FILES
+                  </motion.button>
+                </motion.div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Processing Status */}
+        <AnimatePresence>
+          {(isMerging || isSplitting) && (
             <motion.div
               className={styles.merging}
               initial={{ opacity: 0, scale: 0.9 }}
@@ -331,7 +616,7 @@ export default function Home() {
               exit={{ opacity: 0, scale: 0.9 }}
             >
               <div className={styles.mergingStamp}>
-                <span>MERGING</span>
+                <span>{isMerging ? 'MERGING' : 'SPLITTING'}</span>
                 <div className={styles.mergingDots}>
                   <span>.</span><span>.</span><span>.</span>
                 </div>
