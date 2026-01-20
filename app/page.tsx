@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { PDFDocument } from 'pdf-lib'
+import { PDFDocument, degrees } from 'pdf-lib'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import * as pdfjsLib from 'pdfjs-dist'
 import styles from './page.module.css'
@@ -11,7 +11,7 @@ if (typeof window !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
 }
 
-type Mode = 'merge' | 'split'
+type Mode = 'merge' | 'trim'
 
 interface PDFFile {
   id: string
@@ -27,7 +27,7 @@ interface PageThumbnail {
   height: number
 }
 
-interface SplitFile {
+interface TrimFile {
   file: File
   name: string
   pageCount: number
@@ -42,10 +42,12 @@ export default function Home() {
   const [files, setFiles] = useState<PDFFile[]>([])
   const [isMerging, setIsMerging] = useState(false)
 
-  // Split mode state
-  const [splitFile, setSplitFile] = useState<SplitFile | null>(null)
+  // Trim mode state
+  const [trimFile, setTrimFile] = useState<TrimFile | null>(null)
   const [cutPoints, setCutPoints] = useState<number[]>([])
-  const [isSplitting, setIsSplitting] = useState(false)
+  const [deletedPages, setDeletedPages] = useState<Set<number>>(new Set())
+  const [rotations, setRotations] = useState<Map<number, number>>(new Map())
+  const [isProcessing, setIsProcessing] = useState(false)
   const [isLoadingThumbnails, setIsLoadingThumbnails] = useState(false)
   const [viewerPage, setViewerPage] = useState<number | null>(null)
 
@@ -105,8 +107,10 @@ export default function Home() {
     setMode(newMode)
     setError(null)
     setFiles([])
-    setSplitFile(null)
+    setTrimFile(null)
     setCutPoints([])
+    setDeletedPages(new Set())
+    setRotations(new Map())
   }
 
   // MERGE MODE FUNCTIONS
@@ -183,8 +187,8 @@ export default function Home() {
     }
   }, [files])
 
-  // SPLIT MODE FUNCTIONS
-  const addSplitFile = useCallback(async (newFiles: FileList | File[]) => {
+  // TRIM MODE FUNCTIONS
+  const addTrimFile = useCallback(async (newFiles: FileList | File[]) => {
     setError(null)
     const pdfFiles = Array.from(newFiles).filter(
       (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
@@ -203,8 +207,8 @@ export default function Home() {
       return
     }
 
-    if (pageCount < 2) {
-      setError('PDF must have at least 2 pages to split')
+    if (pageCount < 1) {
+      setError('PDF appears to be empty')
       return
     }
 
@@ -212,8 +216,10 @@ export default function Home() {
 
     try {
       const thumbnails = await generateThumbnails(file)
-      setSplitFile({ file, name: file.name, pageCount, thumbnails })
+      setTrimFile({ file, name: file.name, pageCount, thumbnails })
       setCutPoints([])
+      setDeletedPages(new Set())
+      setRotations(new Map())
     } catch {
       setError('Could not generate page previews. File may be corrupted.')
     } finally {
@@ -235,35 +241,80 @@ export default function Home() {
     })
   }
 
-  const splitPDF = useCallback(async () => {
-    if (!splitFile || cutPoints.length === 0) return
+  // Toggle page deletion
+  const toggleDeletePage = (pageNum: number) => {
+    setDeletedPages((prev) => {
+      const newSet = new Set(prev)
+      if (newSet.has(pageNum)) {
+        newSet.delete(pageNum)
+      } else {
+        // Don't allow deleting all pages
+        if (trimFile && newSet.size >= trimFile.pageCount - 1) {
+          setError('Cannot delete all pages')
+          return prev
+        }
+        newSet.add(pageNum)
+        setError(null)
+      }
+      return newSet
+    })
+  }
 
-    setIsSplitting(true)
+  // Rotate page by 90 degrees
+  const rotatePage = (pageNum: number) => {
+    setRotations((prev) => {
+      const newMap = new Map(prev)
+      const currentRotation = newMap.get(pageNum) || 0
+      const newRotation = (currentRotation + 90) % 360
+      if (newRotation === 0) {
+        newMap.delete(pageNum)
+      } else {
+        newMap.set(pageNum, newRotation)
+      }
+      return newMap
+    })
+  }
+
+  // Check if there are any modifications
+  const hasModifications = deletedPages.size > 0 || rotations.size > 0 || cutPoints.length > 0
+
+  // Get active (non-deleted) page numbers
+  const getActivePages = (): number[] => {
+    if (!trimFile) return []
+    return Array.from({ length: trimFile.pageCount }, (_, i) => i + 1)
+      .filter(p => !deletedPages.has(p))
+  }
+
+  const processTrim = useCallback(async () => {
+    if (!trimFile || !hasModifications) return
+
+    setIsProcessing(true)
     setError(null)
 
     try {
-      const arrayBuffer = await splitFile.file.arrayBuffer()
+      const arrayBuffer = await trimFile.file.arrayBuffer()
       const sourcePdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true })
 
-      const ranges: [number, number][] = []
-      let start = 0
-      for (const cut of cutPoints) {
-        ranges.push([start, cut])
-        start = cut
-      }
-      ranges.push([start, splitFile.pageCount])
+      // Get non-deleted pages
+      const activePageNums = Array.from({ length: trimFile.pageCount }, (_, i) => i + 1)
+        .filter(p => !deletedPages.has(p))
 
-      const baseName = splitFile.name.replace(/\.pdf$/i, '')
+      const baseName = trimFile.name.replace(/\.pdf$/i, '')
 
-      for (let i = 0; i < ranges.length; i++) {
-        const [rangeStart, rangeEnd] = ranges[i]
+      if (cutPoints.length === 0) {
+        // No cuts - just apply deletions and rotations to single PDF
         const newPdf = await PDFDocument.create()
-        const pageIndices = Array.from(
-          { length: rangeEnd - rangeStart },
-          (_, idx) => rangeStart + idx
-        )
+        const pageIndices = activePageNums.map(p => p - 1)
         const pages = await newPdf.copyPages(sourcePdf, pageIndices)
-        pages.forEach((page) => newPdf.addPage(page))
+
+        pages.forEach((page, idx) => {
+          const originalPageNum = activePageNums[idx]
+          const rotation = rotations.get(originalPageNum) || 0
+          if (rotation !== 0) {
+            page.setRotation(degrees(rotation))
+          }
+          newPdf.addPage(page)
+        })
 
         const pdfBytes = await newPdf.save()
         const blob = new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' })
@@ -271,31 +322,82 @@ export default function Home() {
 
         const link = document.createElement('a')
         link.href = url
-        link.download = `${baseName}-part${i + 1}.pdf`
+        link.download = `${baseName}-trimmed.pdf`
         document.body.appendChild(link)
         link.click()
         document.body.removeChild(link)
         URL.revokeObjectURL(url)
+      } else {
+        // Has cuts - split into multiple PDFs with deletions/rotations applied
+        // Build ranges from cut points (based on active pages only)
+        const sortedCuts = [...cutPoints].sort((a, b) => a - b)
+        const ranges: number[][] = []
+        let currentRange: number[] = []
 
-        if (i < ranges.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 300))
+        for (const pageNum of activePageNums) {
+          currentRange.push(pageNum)
+          if (sortedCuts.includes(pageNum)) {
+            ranges.push([...currentRange])
+            currentRange = []
+          }
+        }
+        if (currentRange.length > 0) {
+          ranges.push(currentRange)
+        }
+
+        for (let i = 0; i < ranges.length; i++) {
+          const rangePages = ranges[i]
+          if (rangePages.length === 0) continue
+
+          const newPdf = await PDFDocument.create()
+          const pageIndices = rangePages.map(p => p - 1)
+          const pages = await newPdf.copyPages(sourcePdf, pageIndices)
+
+          pages.forEach((page, idx) => {
+            const originalPageNum = rangePages[idx]
+            const rotation = rotations.get(originalPageNum) || 0
+            if (rotation !== 0) {
+              page.setRotation(degrees(rotation))
+            }
+            newPdf.addPage(page)
+          })
+
+          const pdfBytes = await newPdf.save()
+          const blob = new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' })
+          const url = URL.createObjectURL(blob)
+
+          const link = document.createElement('a')
+          link.href = url
+          link.download = `${baseName}-part${i + 1}.pdf`
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(url)
+
+          if (i < ranges.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 300))
+          }
         }
       }
 
       setTimeout(() => {
-        setSplitFile(null)
+        setTrimFile(null)
         setCutPoints([])
-        setIsSplitting(false)
+        setDeletedPages(new Set())
+        setRotations(new Map())
+        setIsProcessing(false)
       }, 1000)
     } catch {
-      setError('Failed to split PDF. File may be corrupted or encrypted.')
-      setIsSplitting(false)
+      setError('Failed to process PDF. File may be corrupted or encrypted.')
+      setIsProcessing(false)
     }
-  }, [splitFile, cutPoints])
+  }, [trimFile, cutPoints, deletedPages, rotations, hasModifications])
 
-  const removeSplitFile = () => {
-    setSplitFile(null)
+  const removeTrimFile = () => {
+    setTrimFile(null)
     setCutPoints([])
+    setDeletedPages(new Set())
+    setRotations(new Map())
     setError(null)
   }
 
@@ -310,7 +412,7 @@ export default function Home() {
 
   // Lightbox keyboard navigation
   useEffect(() => {
-    if (viewerPage === null || !splitFile) return
+    if (viewerPage === null || !trimFile) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -318,7 +420,7 @@ export default function Home() {
       } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault()
         setViewerPage((prev) =>
-          prev !== null && prev < splitFile.pageCount ? prev + 1 : prev
+          prev !== null && prev < trimFile.pageCount ? prev + 1 : prev
         )
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault()
@@ -328,7 +430,7 @@ export default function Home() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [viewerPage, splitFile])
+  }, [viewerPage, trimFile])
 
   // Scroll thumbnail into view when navigating in lightbox
   useEffect(() => {
@@ -378,12 +480,12 @@ export default function Home() {
         addFiles(e.dataTransfer.files)
       }
     } else {
-      if (splitFile) {
+      if (trimFile) {
         setError('Remove current file first')
         return
       }
       if (e.dataTransfer.files?.length) {
-        addSplitFile(e.dataTransfer.files)
+        addTrimFile(e.dataTransfer.files)
       }
     }
   }
@@ -393,25 +495,14 @@ export default function Home() {
       if (mode === 'merge') {
         addFiles(e.target.files)
       } else {
-        addSplitFile(e.target.files)
+        addTrimFile(e.target.files)
       }
     }
     e.target.value = ''
   }
 
   const totalPages = files.reduce((sum, f) => sum + (f.pageCount || 0), 0)
-  const isDropDisabled = mode === 'merge' ? files.length >= MAX_FILES : !!splitFile || isLoadingThumbnails
-
-  // Group thumbnails by rows for cut point insertion
-  const getThumbnailRows = () => {
-    if (!splitFile) return []
-    const rows: PageThumbnail[][] = []
-    const perRow = 4
-    for (let i = 0; i < splitFile.thumbnails.length; i += perRow) {
-      rows.push(splitFile.thumbnails.slice(i, i + perRow))
-    }
-    return rows
-  }
+  const isDropDisabled = mode === 'merge' ? files.length >= MAX_FILES : !!trimFile || isLoadingThumbnails
 
   return (
     <main className={styles.main}>
@@ -452,11 +543,11 @@ export default function Home() {
             MERGE
           </button>
           <button
-            className={`${styles.modeButton} ${mode === 'split' ? styles.modeButtonActive : ''}`}
-            onClick={() => handleModeChange('split')}
+            className={`${styles.modeButton} ${mode === 'trim' ? styles.modeButtonActive : ''}`}
+            onClick={() => handleModeChange('trim')}
           >
             <span className={styles.modeIcon}>&#9986;</span>
-            SPLIT
+            TRIM
           </button>
         </motion.div>
 
@@ -508,14 +599,14 @@ export default function Home() {
                 ? 'RELEASE TO ADD'
                 : mode === 'merge'
                 ? 'DROP PDFs HERE OR CLICK'
-                : 'DROP A PDF TO SPLIT'}
+                : 'DROP A PDF TO TRIM'}
             </p>
             <p className={styles.dropSubtext}>
               {mode === 'merge'
                 ? `${files.length}/${MAX_FILES} FILES — REORDER THEN MERGE`
-                : splitFile
-                ? `${splitFile.pageCount} PAGES — CLICK BETWEEN PAGES TO CUT`
-                : 'SINGLE PDF — UP TO 5 PARTS'}
+                : trimFile
+                ? `${trimFile.pageCount} PAGES`
+                : 'ROTATE • DELETE • SPLIT'}
             </p>
           </div>
 
@@ -615,9 +706,9 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* SPLIT MODE: Contact Sheet with Thumbnails */}
+        {/* TRIM MODE: Contact Sheet with Thumbnails */}
         <AnimatePresence>
-          {mode === 'split' && splitFile && (
+          {mode === 'trim' && trimFile && (
             <motion.div
               className={styles.fileSection}
               initial={{ opacity: 0 }}
@@ -625,25 +716,37 @@ export default function Home() {
               exit={{ opacity: 0 }}
             >
               <div className={styles.fileSectionHeader}>
-                <span>{splitFile.name}</span>
-                <button className={styles.removeFileBtn} onClick={removeSplitFile}>
+                <span>{trimFile.name}</span>
+                <button className={styles.removeFileBtn} onClick={removeTrimFile}>
                   REMOVE
                 </button>
+              </div>
+
+              {/* Trim options helper text */}
+              <div className={styles.trimHelp}>
+                <span className={styles.trimHelpItem}>
+                  <span className={styles.trimHelpIcon}>&#8635;</span> ROTATE
+                </span>
+                <span className={styles.trimHelpItem}>
+                  <span className={styles.trimHelpIcon}>&times;</span> DELETE
+                </span>
+                <span className={styles.trimHelpItem}>
+                  <span className={styles.trimHelpIcon}>✂</span> SPLIT
+                </span>
               </div>
 
               {/* Contact Sheet */}
               <div className={styles.contactSheet}>
                 <div className={styles.contactSheetHeader}>
                   <span>PROOF SHEET</span>
-                  <span>{splitFile.pageCount} PAGES</span>
+                  <span>{trimFile.pageCount - deletedPages.size} / {trimFile.pageCount} PAGES</span>
                 </div>
 
                 <div className={styles.thumbnailContainer}>
-                  {splitFile.thumbnails.map((thumb, idx) => {
-                    const isLastInRow = (idx + 1) % 4 === 0 || idx === splitFile.thumbnails.length - 1
-                    const rowEndPage = Math.min(Math.ceil((idx + 1) / 4) * 4, splitFile.pageCount)
-                    const showCutLine = isLastInRow && rowEndPage < splitFile.pageCount
+                  {trimFile.thumbnails.map((thumb, idx) => {
                     const partNum = getPartForPage(thumb.pageNum)
+                    const isDeleted = deletedPages.has(thumb.pageNum)
+                    const rotation = rotations.get(thumb.pageNum) || 0
 
                     return (
                       <div
@@ -657,38 +760,72 @@ export default function Home() {
                       >
                         <motion.div
                           className={`${styles.thumbnail} ${
-                            cutPoints.length > 0 ? styles[`part${partNum}`] || '' : ''
-                          }`}
+                            cutPoints.length > 0 && !isDeleted ? styles[`part${partNum}`] || '' : ''
+                          } ${isDeleted ? styles.thumbnailDeleted : ''}`}
                           initial={{ opacity: 0, scale: 0.9 }}
                           animate={{ opacity: 1, scale: 1 }}
                           transition={{ delay: idx * 0.03 }}
-                          whileHover={{ scale: 1.05, zIndex: 10 }}
-                          onClick={() => setViewerPage(thumb.pageNum)}
+                          whileHover={{ scale: isDeleted ? 1 : 1.05, zIndex: 10 }}
+                          onClick={() => !isDeleted && setViewerPage(thumb.pageNum)}
                           role="button"
-                          tabIndex={0}
-                          onKeyDown={(e) => e.key === 'Enter' && setViewerPage(thumb.pageNum)}
+                          tabIndex={isDeleted ? -1 : 0}
+                          onKeyDown={(e) => e.key === 'Enter' && !isDeleted && setViewerPage(thumb.pageNum)}
                         >
                           <img
                             src={thumb.dataUrl}
                             alt={`Page ${thumb.pageNum}`}
                             className={styles.thumbnailImage}
+                            style={{ transform: `rotate(${rotation}deg)` }}
                           />
                           <div className={styles.thumbnailNumber}>{thumb.pageNum}</div>
-                          {cutPoints.length > 0 && (
+                          {cutPoints.length > 0 && !isDeleted && (
                             <div className={styles.thumbnailPart}>P{partNum}</div>
                           )}
-                          <div className={styles.thumbnailZoom}>&#128269;</div>
+                          {rotation !== 0 && (
+                            <div className={styles.thumbnailRotation}>{rotation}°</div>
+                          )}
+                          {!isDeleted && <div className={styles.thumbnailZoom}>&#128269;</div>}
+                          {isDeleted && <div className={styles.thumbnailDeletedOverlay}>DELETED</div>}
+
+                          {/* Action buttons */}
+                          <div className={styles.thumbnailActions}>
+                            <button
+                              className={styles.thumbnailActionBtn}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                rotatePage(thumb.pageNum)
+                              }}
+                              title="Rotate 90°"
+                            >
+                              &#8635;
+                            </button>
+                            <button
+                              className={`${styles.thumbnailActionBtn} ${styles.thumbnailActionDelete} ${
+                                isDeleted ? styles.thumbnailActionDeleteActive : ''
+                              }`}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleDeletePage(thumb.pageNum)
+                              }}
+                              title={isDeleted ? 'Restore page' : 'Delete page'}
+                            >
+                              {isDeleted ? '↩' : '×'}
+                            </button>
+                          </div>
                         </motion.div>
 
                         {/* Cut line after each page (except last) */}
-                        {idx < splitFile.thumbnails.length - 1 && (
+                        {idx < trimFile.thumbnails.length - 1 && (
                           <button
                             className={`${styles.cutLine} ${
                               cutPoints.includes(thumb.pageNum) ? styles.cutLineActive : ''
-                            }`}
-                            onClick={() => toggleCutPoint(thumb.pageNum)}
+                            } ${isDeleted ? styles.cutLineDisabled : ''}`}
+                            onClick={() => !isDeleted && toggleCutPoint(thumb.pageNum)}
+                            disabled={isDeleted}
                             title={
-                              cutPoints.includes(thumb.pageNum)
+                              isDeleted
+                                ? 'Cannot cut after deleted page'
+                                : cutPoints.includes(thumb.pageNum)
                                 ? `Remove cut after page ${thumb.pageNum}`
                                 : `Cut after page ${thumb.pageNum}`
                             }
@@ -704,46 +841,83 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Split summary and button */}
-              {cutPoints.length > 0 && (
+              {/* Summary and action button */}
+              {hasModifications && (
                 <motion.div
                   className={styles.splitSummary}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                 >
-                  <div className={styles.splitParts}>
-                    {(() => {
-                      const ranges: string[] = []
-                      let start = 1
-                      for (const cut of cutPoints) {
-                        ranges.push(`${start}–${cut}`)
-                        start = cut + 1
-                      }
-                      ranges.push(`${start}–${splitFile.pageCount}`)
-                      return ranges.map((range, idx) => (
-                        <span key={idx} className={styles.partBadge}>
-                          PART {idx + 1}: {range}
-                        </span>
-                      ))
-                    })()}
+                  {/* Modification summary */}
+                  <div className={styles.modificationSummary}>
+                    {deletedPages.size > 0 && (
+                      <span className={styles.modBadge}>
+                        {deletedPages.size} PAGE{deletedPages.size > 1 ? 'S' : ''} DELETED
+                      </span>
+                    )}
+                    {rotations.size > 0 && (
+                      <span className={styles.modBadge}>
+                        {rotations.size} PAGE{rotations.size > 1 ? 'S' : ''} ROTATED
+                      </span>
+                    )}
                   </div>
+
+                  {/* Split parts preview */}
+                  {cutPoints.length > 0 && (
+                    <div className={styles.splitParts}>
+                      {(() => {
+                        const activePages = Array.from({ length: trimFile.pageCount }, (_, i) => i + 1)
+                          .filter(p => !deletedPages.has(p))
+                        const sortedCuts = [...cutPoints].sort((a, b) => a - b)
+                        const ranges: string[] = []
+                        let currentRange: number[] = []
+
+                        for (const pageNum of activePages) {
+                          currentRange.push(pageNum)
+                          if (sortedCuts.includes(pageNum)) {
+                            if (currentRange.length > 0) {
+                              ranges.push(currentRange.length === 1
+                                ? `${currentRange[0]}`
+                                : `${currentRange[0]}–${currentRange[currentRange.length - 1]}`)
+                            }
+                            currentRange = []
+                          }
+                        }
+                        if (currentRange.length > 0) {
+                          ranges.push(currentRange.length === 1
+                            ? `${currentRange[0]}`
+                            : `${currentRange[0]}–${currentRange[currentRange.length - 1]}`)
+                        }
+
+                        return ranges.map((range, idx) => (
+                          <span key={idx} className={styles.partBadge}>
+                            PART {idx + 1}: {range}
+                          </span>
+                        ))
+                      })()}
+                    </div>
+                  )}
 
                   <motion.button
                     className={styles.splitButton}
-                    onClick={splitPDF}
-                    disabled={isSplitting}
+                    onClick={processTrim}
+                    disabled={isProcessing}
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                   >
-                    <span className={styles.splitButtonIcon}>&#9986;</span>
-                    SPLIT INTO {cutPoints.length + 1} FILES
+                    <span className={styles.splitButtonIcon}>
+                      {cutPoints.length > 0 ? '✂' : '↓'}
+                    </span>
+                    {cutPoints.length > 0
+                      ? `SPLIT INTO ${cutPoints.length + 1} FILES`
+                      : 'DOWNLOAD TRIMMED PDF'}
                   </motion.button>
                 </motion.div>
               )}
 
-              {cutPoints.length === 0 && (
+              {!hasModifications && (
                 <div className={styles.cutHint}>
-                  <span>&#9758;</span> CLICK BETWEEN PAGES TO ADD CUT POINTS
+                  <span>&#9758;</span> HOVER PAGES TO ROTATE OR DELETE • CLICK BETWEEN TO SPLIT
                 </div>
               )}
             </motion.div>
@@ -752,7 +926,7 @@ export default function Home() {
 
         {/* Processing Status */}
         <AnimatePresence>
-          {(isMerging || isSplitting) && (
+          {(isMerging || isProcessing) && (
             <motion.div
               className={styles.merging}
               initial={{ opacity: 0, scale: 0.9 }}
@@ -760,7 +934,7 @@ export default function Home() {
               exit={{ opacity: 0, scale: 0.9 }}
             >
               <div className={styles.mergingStamp}>
-                <span>{isMerging ? 'MERGING' : 'SPLITTING'}</span>
+                <span>{isMerging ? 'MERGING' : 'PROCESSING'}</span>
                 <div className={styles.mergingDots}>
                   <span>.</span><span>.</span><span>.</span>
                 </div>
@@ -771,7 +945,7 @@ export default function Home() {
 
         {/* Light Table Viewer */}
         <AnimatePresence>
-          {viewerPage !== null && splitFile && (
+          {viewerPage !== null && trimFile && (
             <motion.div
               className={styles.lightbox}
               initial={{ opacity: 0 }}
@@ -806,10 +980,34 @@ export default function Home() {
                 <div className={styles.lightboxImageContainer}>
                   <img
                     key={viewerPage}
-                    src={splitFile.thumbnails[viewerPage - 1]?.dataUrl}
+                    src={trimFile.thumbnails[viewerPage - 1]?.dataUrl}
                     alt={`Page ${viewerPage}`}
                     className={styles.lightboxImage}
+                    style={{ transform: `rotate(${rotations.get(viewerPage) || 0}deg)` }}
                   />
+                  {deletedPages.has(viewerPage) && (
+                    <div className={styles.lightboxDeletedOverlay}>DELETED</div>
+                  )}
+                </div>
+
+                {/* Page Actions */}
+                <div className={styles.lightboxActions}>
+                  <button
+                    className={styles.lightboxActionBtn}
+                    onClick={() => rotatePage(viewerPage)}
+                    title="Rotate 90°"
+                  >
+                    &#8635; ROTATE
+                  </button>
+                  <button
+                    className={`${styles.lightboxActionBtn} ${
+                      deletedPages.has(viewerPage) ? styles.lightboxActionBtnActive : ''
+                    }`}
+                    onClick={() => toggleDeletePage(viewerPage)}
+                    title={deletedPages.has(viewerPage) ? 'Restore page' : 'Delete page'}
+                  >
+                    {deletedPages.has(viewerPage) ? '↩ RESTORE' : '× DELETE'}
+                  </button>
                 </div>
 
                 {/* Navigation */}
@@ -824,9 +1022,9 @@ export default function Home() {
 
                   <div className={styles.lightboxInfo}>
                     <span className={styles.lightboxPage}>
-                      PAGE {viewerPage} OF {splitFile.pageCount}
+                      PAGE {viewerPage} OF {trimFile.pageCount}
                     </span>
-                    {cutPoints.length > 0 && (
+                    {cutPoints.length > 0 && !deletedPages.has(viewerPage) && (
                       <span className={styles.lightboxPart}>
                         PART {getPartForPage(viewerPage)}
                       </span>
@@ -837,10 +1035,10 @@ export default function Home() {
                     className={styles.lightboxNavBtn}
                     onClick={() =>
                       setViewerPage((p) =>
-                        p && p < splitFile.pageCount ? p + 1 : p
+                        p && p < trimFile.pageCount ? p + 1 : p
                       )
                     }
-                    disabled={viewerPage >= splitFile.pageCount}
+                    disabled={viewerPage >= trimFile.pageCount}
                   >
                     NEXT &#9654;
                   </button>
@@ -853,7 +1051,7 @@ export default function Home() {
                       cutPoints.includes(viewerPage - 1) ? styles.lightboxCutBtnActive : ''
                     }`}
                     onClick={() => toggleCutPoint(viewerPage - 1)}
-                    disabled={viewerPage <= 1}
+                    disabled={viewerPage <= 1 || deletedPages.has(viewerPage - 1)}
                     title={
                       cutPoints.includes(viewerPage - 1)
                         ? `Remove cut before page ${viewerPage}`
@@ -870,7 +1068,7 @@ export default function Home() {
                       cutPoints.includes(viewerPage) ? styles.lightboxCutBtnActive : ''
                     }`}
                     onClick={() => toggleCutPoint(viewerPage)}
-                    disabled={viewerPage >= splitFile.pageCount}
+                    disabled={viewerPage >= trimFile.pageCount || deletedPages.has(viewerPage)}
                     title={
                       cutPoints.includes(viewerPage)
                         ? `Remove cut after page ${viewerPage}`

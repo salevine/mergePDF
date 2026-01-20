@@ -422,7 +422,7 @@
   font-size: 1rem;
 }
 
-/* Split Mode - Remove File Button */
+/* Trim Mode - Remove File Button */
 .removeFileBtn {
   background: transparent;
   border: 1px solid var(--paper-brown);
@@ -440,6 +440,32 @@
   background: var(--ink-red);
   border-color: var(--ink-red);
   color: var(--paper-cream);
+}
+
+/* Trim Mode - Help Text */
+.trimHelp {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  background: var(--paper-manila);
+  border: 1px solid var(--paper-kraft);
+}
+
+.trimHelpItem {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--paper-brown);
+}
+
+.trimHelpIcon {
+  font-size: 0.85rem;
+  color: var(--ink-red);
 }
 
 /* Split Mode - Contact Sheet */
@@ -580,6 +606,101 @@
   pointer-events: none;
 }
 
+/* Thumbnail rotation indicator */
+.thumbnailRotation {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--paper-brown);
+  color: var(--paper-cream);
+  font-size: 0.5rem;
+  font-weight: 700;
+  padding: 2px 4px;
+  letter-spacing: 0.05em;
+}
+
+/* Thumbnail action buttons */
+.thumbnailActions {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.thumbnail:hover .thumbnailActions {
+  opacity: 1;
+}
+
+.thumbnailActionBtn {
+  flex: 1;
+  padding: 4px 6px;
+  background: var(--ink-black);
+  border: none;
+  color: var(--paper-cream);
+  font-size: 0.65rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.thumbnailActionBtn:hover {
+  background: var(--paper-brown);
+}
+
+.thumbnailActionDelete:hover {
+  background: var(--ink-red);
+}
+
+.thumbnailActionDeleteActive {
+  background: var(--ink-red);
+}
+
+.thumbnailActionDeleteActive:hover {
+  background: #5B8C5A;
+}
+
+/* Deleted thumbnail state */
+.thumbnailDeleted {
+  opacity: 0.4;
+  border-style: dashed;
+  cursor: default !important;
+}
+
+.thumbnailDeleted:hover {
+  transform: none !important;
+  border-color: var(--paper-kraft) !important;
+}
+
+.thumbnailDeleted .thumbnailImage {
+  filter: grayscale(100%);
+}
+
+.thumbnailDeletedOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-15deg);
+  background: var(--ink-red);
+  color: var(--paper-cream);
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 4px 8px;
+  letter-spacing: 0.1em;
+}
+
+/* Deleted state still shows action buttons */
+.thumbnailDeleted .thumbnailActions {
+  opacity: 1;
+}
+
+.thumbnailDeleted .thumbnailZoom {
+  display: none;
+}
+
 /* Cut Line between thumbnails */
 .cutLine {
   display: flex;
@@ -632,6 +753,19 @@
 .cutLineActive:hover .cutLineIcon {
   background: var(--accent-stamp);
   border-color: var(--accent-stamp);
+}
+
+.cutLineDisabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.cutLineDisabled:hover {
+  background: transparent;
+}
+
+.cutLineDisabled .cutLineIcon {
+  transform: none;
 }
 
 /* Cut hint */
@@ -762,6 +896,59 @@
   box-shadow:
     0 0 0 1px var(--paper-brown),
     0 20px 60px rgba(0, 0, 0, 0.5);
+  transition: transform 0.3s ease;
+}
+
+.lightboxDeletedOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-15deg);
+  background: var(--ink-red);
+  color: var(--paper-cream);
+  font-size: 1.5rem;
+  font-weight: 700;
+  padding: 1rem 2rem;
+  letter-spacing: 0.2em;
+  z-index: 5;
+}
+
+/* Lightbox Action Buttons */
+.lightboxActions {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--ink-black);
+  border-top: 1px solid rgba(139, 115, 85, 0.3);
+}
+
+.lightboxActionBtn {
+  padding: 0.5rem 1.25rem;
+  background: transparent;
+  border: 1px solid var(--paper-brown);
+  color: var(--paper-cream);
+  font-family: var(--font-mono), 'Courier New', monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lightboxActionBtn:hover {
+  background: var(--paper-brown);
+  color: var(--ink-black);
+}
+
+.lightboxActionBtnActive {
+  background: var(--ink-red);
+  border-color: var(--ink-red);
+}
+
+.lightboxActionBtnActive:hover {
+  background: #5B8C5A;
+  border-color: #5B8C5A;
 }
 
 .lightboxNav {
@@ -878,9 +1065,27 @@
   background: rgba(0, 0, 0, 0.3);
 }
 
-/* Split Mode - Summary */
+/* Trim Mode - Summary */
 .splitSummary {
   margin-top: 1.5rem;
+}
+
+.modificationSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.modBadge {
+  display: inline-block;
+  padding: 0.35rem 0.6rem;
+  background: rgba(184, 74, 60, 0.1);
+  border: 1px solid var(--ink-red);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--ink-red);
 }
 
 .splitParts {
