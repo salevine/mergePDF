@@ -13,6 +13,7 @@
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.0.379",
     "framer-motion": "^11.0.0"
   },
   "devDependencies": {

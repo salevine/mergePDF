@@ -442,93 +442,191 @@
   color: var(--paper-cream);
 }
 
-/* Split Mode - Page List */
-.pageList {
-  display: flex;
-  flex-direction: column;
-  max-height: 400px;
-  overflow-y: auto;
+/* Split Mode - Contact Sheet */
+.contactSheet {
   border: 1px solid var(--paper-kraft);
   background: white;
 }
 
-.pageItem {
+.contactSheetHeader {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 1rem;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--paper-manila);
-}
-
-.pageItem:last-child {
-  border-bottom: none;
-}
-
-.pageNumber {
-  font-size: 0.7rem;
+  background: var(--paper-manila);
+  border-bottom: 1px solid var(--paper-kraft);
+  font-size: 0.6rem;
   font-weight: 700;
+  letter-spacing: 0.15em;
   color: var(--paper-brown);
-  min-width: 1.5rem;
 }
 
-.pageLabel {
-  font-size: 0.75rem;
+.thumbnailContainer {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 0.75rem;
+  gap: 0;
+  max-height: 450px;
+  overflow-y: auto;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      var(--paper-manila) 0px,
+      var(--paper-manila) 1px,
+      transparent 1px,
+      transparent 20px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      var(--paper-manila) 0px,
+      var(--paper-manila) 1px,
+      transparent 1px,
+      transparent 20px
+    );
+}
+
+.thumbnailWrapper {
+  display: flex;
+  align-items: stretch;
+  position: relative;
+}
+
+.thumbnail {
+  position: relative;
+  width: 110px;
+  background: white;
+  border: 2px solid var(--paper-kraft);
+  padding: 4px;
+  margin: 4px;
+  cursor: default;
+  transition: all 0.2s ease;
+  box-shadow: 2px 2px 8px rgba(74, 63, 53, 0.1);
+}
+
+.thumbnail:hover {
+  border-color: var(--paper-brown);
+  box-shadow: 4px 4px 12px rgba(74, 63, 53, 0.2);
+}
+
+.thumbnailImage {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.thumbnailNumber {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: var(--ink-black);
+  color: var(--paper-cream);
+  font-size: 0.6rem;
   font-weight: 700;
-  color: var(--ink-black);
+  padding: 2px 6px;
   letter-spacing: 0.05em;
 }
 
-.pageBar {
-  flex: 1;
-  height: 4px;
-  background: var(--paper-manila);
-  margin-left: auto;
+.thumbnailPart {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: var(--ink-red);
+  color: var(--paper-cream);
+  font-size: 0.55rem;
+  font-weight: 700;
+  padding: 2px 5px;
+  letter-spacing: 0.05em;
 }
 
-/* Split Mode - Cut Points */
-.cutPoint {
+/* Part color coding */
+.part1 { border-color: #5B8C5A; }
+.part2 { border-color: #4A7C9B; }
+.part3 { border-color: #9B6B4A; }
+.part4 { border-color: #7B5B9B; }
+.part5 { border-color: #9B4A6B; }
+
+.part1 .thumbnailPart { background: #5B8C5A; }
+.part2 .thumbnailPart { background: #4A7C9B; }
+.part3 .thumbnailPart { background: #9B6B4A; }
+.part4 .thumbnailPart { background: #7B5B9B; }
+.part5 .thumbnailPart { background: #9B4A6B; }
+
+/* Cut Line between thumbnails */
+.cutLine {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.75rem;
-  width: 100%;
-  padding: 0.5rem 1rem;
-  background: var(--paper-manila);
+  width: 20px;
+  margin: 4px -6px;
+  background: transparent;
   border: none;
-  border-top: 1px dashed var(--paper-kraft);
-  border-bottom: 1px dashed var(--paper-kraft);
-  font-family: var(--font-mono), 'Courier New', monospace;
+  cursor: pointer;
+  z-index: 5;
+  transition: all 0.15s ease;
+}
+
+.cutLine:hover {
+  background: rgba(184, 74, 60, 0.1);
+}
+
+.cutLineIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: var(--paper-manila);
+  border: 1px dashed var(--paper-brown);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  color: var(--paper-brown);
+  transition: all 0.15s ease;
+}
+
+.cutLine:hover .cutLineIcon {
+  background: var(--paper-kraft);
+  border-style: solid;
+  transform: scale(1.1);
+}
+
+.cutLineActive {
+  background: rgba(184, 74, 60, 0.15);
+}
+
+.cutLineActive .cutLineIcon {
+  background: var(--ink-red);
+  border-color: var(--ink-red);
+  color: var(--paper-cream);
+  border-style: solid;
+}
+
+.cutLineActive:hover .cutLineIcon {
+  background: var(--accent-stamp);
+  border-color: var(--accent-stamp);
+}
+
+/* Cut hint */
+.cutHint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: var(--paper-manila);
   font-size: 0.65rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   color: var(--paper-brown);
-  cursor: pointer;
-  transition: all 0.2s ease;
 }
 
-.cutPoint:hover {
-  background: var(--paper-kraft);
-  color: var(--ink-black);
+.cutHint span {
+  font-size: 1rem;
 }
 
-.cutPointActive {
-  background: var(--ink-red);
-  border-color: var(--ink-red);
-  color: var(--paper-cream);
-}
-
-.cutPointActive:hover {
-  background: var(--accent-stamp);
-  color: var(--paper-cream);
-}
-
-.cutIcon {
-  font-size: 0.9rem;
-}
-
-.cutLabel {
-  font-size: 0.6rem;
-  opacity: 0.9;
+/* Loading state */
+.dropIconLoading {
+  animation: pulse 1s ease-in-out infinite;
 }
 
 /* Split Mode - Summary */

@@ -1,9 +1,15 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { PDFDocument } from 'pdf-lib'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
+import * as pdfjsLib from 'pdfjs-dist'
 import styles from './page.module.css'
+
+// Set up PDF.js worker
+if (typeof window !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
+}
 
 type Mode = 'merge' | 'split'
 
@@ -14,10 +20,18 @@ interface PDFFile {
   pageCount: number | null
 }
 
+interface PageThumbnail {
+  pageNum: number
+  dataUrl: string
+  width: number
+  height: number
+}
+
 interface SplitFile {
   file: File
   name: string
   pageCount: number
+  thumbnails: PageThumbnail[]
 }
 
 export default function Home() {
@@ -32,6 +46,7 @@ export default function Home() {
   const [splitFile, setSplitFile] = useState<SplitFile | null>(null)
   const [cutPoints, setCutPoints] = useState<number[]>([])
   const [isSplitting, setIsSplitting] = useState(false)
+  const [isLoadingThumbnails, setIsLoadingThumbnails] = useState(false)
 
   // Shared state
   const [isDragging, setIsDragging] = useState(false)
@@ -40,7 +55,8 @@ export default function Home() {
   const dragCounterRef = useRef(0)
 
   const MAX_FILES = 5
-  const MAX_CUTS = 4 // 4 cuts = 5 PDFs max
+  const MAX_CUTS = 4
+  const THUMBNAIL_SCALE = 0.5
 
   const getPageCount = async (file: File): Promise<number | null> => {
     try {
@@ -50,6 +66,36 @@ export default function Home() {
     } catch {
       return null
     }
+  }
+
+  const generateThumbnails = async (file: File): Promise<PageThumbnail[]> => {
+    const arrayBuffer = await file.arrayBuffer()
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    const thumbnails: PageThumbnail[] = []
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i)
+      const viewport = page.getViewport({ scale: THUMBNAIL_SCALE })
+
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('2d')!
+      canvas.width = viewport.width
+      canvas.height = viewport.height
+
+      await page.render({
+        canvasContext: context,
+        viewport: viewport,
+      }).promise
+
+      thumbnails.push({
+        pageNum: i,
+        dataUrl: canvas.toDataURL('image/jpeg', 0.8),
+        width: viewport.width,
+        height: viewport.height,
+      })
+    }
+
+    return thumbnails
   }
 
   // Reset when switching modes
@@ -160,8 +206,17 @@ export default function Home() {
       return
     }
 
-    setSplitFile({ file, name: file.name, pageCount })
-    setCutPoints([])
+    setIsLoadingThumbnails(true)
+
+    try {
+      const thumbnails = await generateThumbnails(file)
+      setSplitFile({ file, name: file.name, pageCount, thumbnails })
+      setCutPoints([])
+    } catch {
+      setError('Could not generate page previews. File may be corrupted.')
+    } finally {
+      setIsLoadingThumbnails(false)
+    }
   }, [])
 
   const toggleCutPoint = (afterPage: number) => {
@@ -188,7 +243,6 @@ export default function Home() {
       const arrayBuffer = await splitFile.file.arrayBuffer()
       const sourcePdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true })
 
-      // Calculate page ranges based on cut points
       const ranges: [number, number][] = []
       let start = 0
       for (const cut of cutPoints) {
@@ -197,7 +251,6 @@ export default function Home() {
       }
       ranges.push([start, splitFile.pageCount])
 
-      // Create and download each part
       const baseName = splitFile.name.replace(/\.pdf$/i, '')
 
       for (let i = 0; i < ranges.length; i++) {
@@ -222,7 +275,6 @@ export default function Home() {
         document.body.removeChild(link)
         URL.revokeObjectURL(url)
 
-        // Small delay between downloads
         if (i < ranges.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 300))
         }
@@ -243,6 +295,15 @@ export default function Home() {
     setSplitFile(null)
     setCutPoints([])
     setError(null)
+  }
+
+  // Get part number for a page (for visual grouping)
+  const getPartForPage = (pageNum: number): number => {
+    let part = 1
+    for (const cut of cutPoints) {
+      if (pageNum > cut) part++
+    }
+    return part
   }
 
   // SHARED DRAG HANDLERS
@@ -306,7 +367,18 @@ export default function Home() {
   }
 
   const totalPages = files.reduce((sum, f) => sum + (f.pageCount || 0), 0)
-  const isDropDisabled = mode === 'merge' ? files.length >= MAX_FILES : !!splitFile
+  const isDropDisabled = mode === 'merge' ? files.length >= MAX_FILES : !!splitFile || isLoadingThumbnails
+
+  // Group thumbnails by rows for cut point insertion
+  const getThumbnailRows = () => {
+    if (!splitFile) return []
+    const rows: PageThumbnail[][] = []
+    const perRow = 4
+    for (let i = 0; i < splitFile.thumbnails.length; i += perRow) {
+      rows.push(splitFile.thumbnails.slice(i, i + perRow))
+    }
+    return rows
+  }
 
   return (
     <main className={styles.main}>
@@ -382,7 +454,9 @@ export default function Home() {
 
           <div className={styles.dropContent}>
             <div className={styles.dropIcon}>
-              {isDropDisabled ? (
+              {isLoadingThumbnails ? (
+                <span className={styles.dropIconLoading}>&#8987;</span>
+              ) : isDropDisabled ? (
                 <span>&#10003;</span>
               ) : isDragging ? (
                 <span className={styles.dropIconActive}>&#8675;</span>
@@ -393,7 +467,9 @@ export default function Home() {
               )}
             </div>
             <p className={styles.dropText}>
-              {isDropDisabled
+              {isLoadingThumbnails
+                ? 'GENERATING PREVIEWS...'
+                : isDropDisabled
                 ? mode === 'merge' ? 'MAXIMUM FILES REACHED' : 'FILE LOADED'
                 : isDragging
                 ? 'RELEASE TO ADD'
@@ -405,7 +481,7 @@ export default function Home() {
               {mode === 'merge'
                 ? `${files.length}/${MAX_FILES} FILES — REORDER THEN MERGE`
                 : splitFile
-                ? `${splitFile.pageCount} PAGES — CLICK TO ADD CUT POINTS`
+                ? `${splitFile.pageCount} PAGES — CLICK BETWEEN PAGES TO CUT`
                 : 'SINGLE PDF — UP TO 5 PARTS'}
             </p>
           </div>
@@ -506,7 +582,7 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* SPLIT MODE: Page List with Cut Points */}
+        {/* SPLIT MODE: Contact Sheet with Thumbnails */}
         <AnimatePresence>
           {mode === 'split' && splitFile && (
             <motion.div
@@ -522,48 +598,64 @@ export default function Home() {
                 </button>
               </div>
 
-              <div className={styles.pageList}>
-                {Array.from({ length: splitFile.pageCount }, (_, i) => (
-                  <div key={i}>
-                    {/* Page item */}
-                    <motion.div
-                      className={styles.pageItem}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.02 }}
-                    >
-                      <div className={styles.pageNumber}>
-                        {String(i + 1).padStart(2, '0')}
-                      </div>
-                      <div className={styles.pageLabel}>PAGE {i + 1}</div>
-                      <div className={styles.pageBar} />
-                    </motion.div>
+              {/* Contact Sheet */}
+              <div className={styles.contactSheet}>
+                <div className={styles.contactSheetHeader}>
+                  <span>PROOF SHEET</span>
+                  <span>{splitFile.pageCount} PAGES</span>
+                </div>
 
-                    {/* Cut point button (between pages, not after last page) */}
-                    {i < splitFile.pageCount - 1 && (
-                      <motion.button
-                        className={`${styles.cutPoint} ${
-                          cutPoints.includes(i + 1) ? styles.cutPointActive : ''
-                        }`}
-                        onClick={() => toggleCutPoint(i + 1)}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ delay: i * 0.02 + 0.01 }}
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                      >
-                        <span className={styles.cutIcon}>
-                          {cutPoints.includes(i + 1) ? '✂' : '+ CUT HERE'}
-                        </span>
-                        {cutPoints.includes(i + 1) && (
-                          <span className={styles.cutLabel}>
-                            SPLIT AFTER PAGE {i + 1}
-                          </span>
+                <div className={styles.thumbnailContainer}>
+                  {splitFile.thumbnails.map((thumb, idx) => {
+                    const isLastInRow = (idx + 1) % 4 === 0 || idx === splitFile.thumbnails.length - 1
+                    const rowEndPage = Math.min(Math.ceil((idx + 1) / 4) * 4, splitFile.pageCount)
+                    const showCutLine = isLastInRow && rowEndPage < splitFile.pageCount
+                    const partNum = getPartForPage(thumb.pageNum)
+
+                    return (
+                      <div key={thumb.pageNum} className={styles.thumbnailWrapper}>
+                        <motion.div
+                          className={`${styles.thumbnail} ${
+                            cutPoints.length > 0 ? styles[`part${partNum}`] || '' : ''
+                          }`}
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ delay: idx * 0.03 }}
+                          whileHover={{ scale: 1.05, zIndex: 10 }}
+                        >
+                          <img
+                            src={thumb.dataUrl}
+                            alt={`Page ${thumb.pageNum}`}
+                            className={styles.thumbnailImage}
+                          />
+                          <div className={styles.thumbnailNumber}>{thumb.pageNum}</div>
+                          {cutPoints.length > 0 && (
+                            <div className={styles.thumbnailPart}>P{partNum}</div>
+                          )}
+                        </motion.div>
+
+                        {/* Cut line after each page (except last) */}
+                        {idx < splitFile.thumbnails.length - 1 && (
+                          <button
+                            className={`${styles.cutLine} ${
+                              cutPoints.includes(thumb.pageNum) ? styles.cutLineActive : ''
+                            }`}
+                            onClick={() => toggleCutPoint(thumb.pageNum)}
+                            title={
+                              cutPoints.includes(thumb.pageNum)
+                                ? `Remove cut after page ${thumb.pageNum}`
+                                : `Cut after page ${thumb.pageNum}`
+                            }
+                          >
+                            <span className={styles.cutLineIcon}>
+                              {cutPoints.includes(thumb.pageNum) ? '✂' : '+'}
+                            </span>
+                          </button>
                         )}
-                      </motion.button>
-                    )}
-                  </div>
-                ))}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
 
               {/* Split summary and button */}
@@ -601,6 +693,12 @@ export default function Home() {
                     SPLIT INTO {cutPoints.length + 1} FILES
                   </motion.button>
                 </motion.div>
+              )}
+
+              {cutPoints.length === 0 && (
+                <div className={styles.cutHint}>
+                  <span>&#9758;</span> CLICK BETWEEN PAGES TO ADD CUT POINTS
+                </div>
               )}
             </motion.div>
           )}
