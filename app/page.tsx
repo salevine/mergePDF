@@ -47,6 +47,7 @@ export default function Home() {
   const [cutPoints, setCutPoints] = useState<number[]>([])
   const [isSplitting, setIsSplitting] = useState(false)
   const [isLoadingThumbnails, setIsLoadingThumbnails] = useState(false)
+  const [viewerPage, setViewerPage] = useState<number | null>(null)
 
   // Shared state
   const [isDragging, setIsDragging] = useState(false)
@@ -305,6 +306,28 @@ export default function Home() {
     }
     return part
   }
+
+  // Lightbox keyboard navigation
+  useEffect(() => {
+    if (viewerPage === null || !splitFile) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setViewerPage(null)
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        setViewerPage((prev) =>
+          prev !== null && prev < splitFile.pageCount ? prev + 1 : prev
+        )
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        setViewerPage((prev) => (prev !== null && prev > 1 ? prev - 1 : prev))
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [viewerPage, splitFile])
 
   // SHARED DRAG HANDLERS
   const handleDragEnter = (e: React.DragEvent) => {
@@ -622,6 +645,10 @@ export default function Home() {
                           animate={{ opacity: 1, scale: 1 }}
                           transition={{ delay: idx * 0.03 }}
                           whileHover={{ scale: 1.05, zIndex: 10 }}
+                          onClick={() => setViewerPage(thumb.pageNum)}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => e.key === 'Enter' && setViewerPage(thumb.pageNum)}
                         >
                           <img
                             src={thumb.dataUrl}
@@ -632,6 +659,7 @@ export default function Home() {
                           {cutPoints.length > 0 && (
                             <div className={styles.thumbnailPart}>P{partNum}</div>
                           )}
+                          <div className={styles.thumbnailZoom}>&#128269;</div>
                         </motion.div>
 
                         {/* Cut line after each page (except last) */}
@@ -719,6 +747,98 @@ export default function Home() {
                   <span>.</span><span>.</span><span>.</span>
                 </div>
               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Light Table Viewer */}
+        <AnimatePresence>
+          {viewerPage !== null && splitFile && (
+            <motion.div
+              className={styles.lightbox}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setViewerPage(null)}
+            >
+              <motion.div
+                className={styles.lightboxContent}
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.8, opacity: 0 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className={styles.lightboxHeader}>
+                  <div className={styles.lightboxTitle}>
+                    <span className={styles.lightboxIcon}>&#9638;</span>
+                    LIGHT TABLE
+                  </div>
+                  <button
+                    className={styles.lightboxClose}
+                    onClick={() => setViewerPage(null)}
+                    aria-label="Close viewer"
+                  >
+                    &times;
+                  </button>
+                </div>
+
+                {/* Image Container */}
+                <div className={styles.lightboxImageContainer}>
+                  <AnimatePresence mode="wait">
+                    <motion.img
+                      key={viewerPage}
+                      src={splitFile.thumbnails[viewerPage - 1]?.dataUrl}
+                      alt={`Page ${viewerPage}`}
+                      className={styles.lightboxImage}
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ duration: 0.2 }}
+                    />
+                  </AnimatePresence>
+                </div>
+
+                {/* Navigation */}
+                <div className={styles.lightboxNav}>
+                  <button
+                    className={styles.lightboxNavBtn}
+                    onClick={() => setViewerPage((p) => (p && p > 1 ? p - 1 : p))}
+                    disabled={viewerPage <= 1}
+                  >
+                    &#9664; PREV
+                  </button>
+
+                  <div className={styles.lightboxInfo}>
+                    <span className={styles.lightboxPage}>
+                      PAGE {viewerPage} OF {splitFile.pageCount}
+                    </span>
+                    {cutPoints.length > 0 && (
+                      <span className={styles.lightboxPart}>
+                        PART {getPartForPage(viewerPage)}
+                      </span>
+                    )}
+                  </div>
+
+                  <button
+                    className={styles.lightboxNavBtn}
+                    onClick={() =>
+                      setViewerPage((p) =>
+                        p && p < splitFile.pageCount ? p + 1 : p
+                      )
+                    }
+                    disabled={viewerPage >= splitFile.pageCount}
+                  >
+                    NEXT &#9654;
+                  </button>
+                </div>
+
+                {/* Keyboard hint */}
+                <div className={styles.lightboxHint}>
+                  USE ARROW KEYS TO NAVIGATE • ESC TO CLOSE
+                </div>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
