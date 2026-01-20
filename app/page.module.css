@@ -314,6 +314,59 @@
   transform: scale(1.1);
 }
 
+/* Merge Button */
+.mergeButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+  margin-top: 1.5rem;
+  padding: 1.25rem 2rem;
+  background: var(--ink-black);
+  border: none;
+  color: var(--paper-cream);
+  font-family: var(--font-mono), 'Courier New', monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.mergeButton::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.05) 50%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+.mergeButton:hover {
+  background: var(--paper-dark);
+}
+
+.mergeButton:active {
+  background: var(--ink-black);
+}
+
+.mergeButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mergeButtonIcon {
+  color: var(--ink-red);
+  font-size: 1rem;
+}
+
 /* Merging State */
 .merging {
   position: fixed;

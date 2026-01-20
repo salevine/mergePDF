@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { PDFDocument } from 'pdf-lib'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import styles from './page.module.css'
@@ -105,16 +105,6 @@ export default function Home() {
       setIsMerging(false)
     }
   }, [files])
-
-  // Auto-merge when we have 2+ files
-  useEffect(() => {
-    if (files.length >= 2 && !isMerging) {
-      const timer = setTimeout(() => {
-        mergePDFs()
-      }, 800)
-      return () => clearTimeout(timer)
-    }
-  }, [files, isMerging, mergePDFs])
 
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault()
@@ -230,7 +220,7 @@ export default function Home() {
                 : 'DROP PDFs HERE OR CLICK'}
             </p>
             <p className={styles.dropSubtext}>
-              {files.length}/{MAX_FILES} FILES — AUTO-MERGES AT 2+
+              {files.length}/{MAX_FILES} FILES — REORDER THEN MERGE
             </p>
           </div>
 
@@ -311,6 +301,22 @@ export default function Home() {
                   </Reorder.Item>
                 ))}
               </Reorder.Group>
+
+              {/* Merge Button */}
+              {files.length >= 2 && (
+                <motion.button
+                  className={styles.mergeButton}
+                  onClick={mergePDFs}
+                  disabled={isMerging}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  <span className={styles.mergeButtonIcon}>&#9638;</span>
+                  MERGE {files.length} FILES INTO ONE
+                </motion.button>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
