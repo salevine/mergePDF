@@ -7,6 +7,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFPageProxy } from 'pdfjs-dist'
 import { zipSync } from 'fflate'
 import styles from './page.module.css'
+import CropEditor, { CropRect, rotateRect } from './CropEditor'
 
 // Set up PDF.js worker
 if (typeof window !== 'undefined') {
@@ -58,6 +59,9 @@ export default function Home() {
   const [exportFormat, setExportFormat] = useState<ImageFormat>('png')
   const [exportDpi, setExportDpi] = useState(150)
   const [excludedExportPages, setExcludedExportPages] = useState<Set<number>>(new Set())
+  const [exportRotations, setExportRotations] = useState<Map<number, number>>(new Map())
+  const [exportCrops, setExportCrops] = useState<Map<number, CropRect>>(new Map())
+  const [cropEditorPage, setCropEditorPage] = useState<number | null>(null)
 
   // Shared state
   const [isDragging, setIsDragging] = useState(false)
@@ -79,9 +83,10 @@ export default function Home() {
   const renderPageToCanvas = async (
     page: PDFPageProxy,
     scale: number,
-    intent: 'display' | 'print' = 'display'
+    intent: 'display' | 'print' = 'display',
+    extraRotation = 0
   ) => {
-    const viewport = page.getViewport({ scale })
+    const viewport = page.getViewport({ scale, rotation: (page.rotate + extraRotation) % 360 })
     const canvas = document.createElement('canvas')
     canvas.width = Math.floor(viewport.width)
     canvas.height = Math.floor(viewport.height)
@@ -141,7 +146,7 @@ export default function Home() {
     setCutPoints([])
     setDeletedPages(new Set())
     setRotations(new Map())
-    setExcludedExportPages(new Set())
+    resetExportEdits()
   }
 
   // MERGE MODE FUNCTIONS
@@ -251,7 +256,7 @@ export default function Home() {
       setCutPoints([])
       setDeletedPages(new Set())
       setRotations(new Map())
-      setExcludedExportPages(new Set())
+      resetExportEdits()
     } catch {
       setError('Could not generate page previews. File may be corrupted.')
     } finally {
@@ -430,11 +435,64 @@ export default function Home() {
     setCutPoints([])
     setDeletedPages(new Set())
     setRotations(new Map())
-    setExcludedExportPages(new Set())
+    resetExportEdits()
     setError(null)
   }
 
   // EXPORT MODE FUNCTIONS
+  const resetExportEdits = () => {
+    setExcludedExportPages(new Set())
+    setExportRotations(new Map())
+    setExportCrops(new Map())
+    setCropEditorPage(null)
+  }
+
+  const rotateExportPage = (pageNum: number) => {
+    setExportRotations((prev) => {
+      const newMap = new Map(prev)
+      const newRotation = ((newMap.get(pageNum) || 0) + 90) % 360
+      if (newRotation === 0) {
+        newMap.delete(pageNum)
+      } else {
+        newMap.set(pageNum, newRotation)
+      }
+      return newMap
+    })
+  }
+
+  const rotateAllExportPages = () => {
+    if (!trimFile) return
+    setExportRotations((prev) => {
+      const newMap = new Map<number, number>()
+      for (let p = 1; p <= trimFile.pageCount; p++) {
+        const newRotation = ((prev.get(p) || 0) + 90) % 360
+        if (newRotation !== 0) newMap.set(p, newRotation)
+      }
+      return newMap
+    })
+  }
+
+  const setExportCrop = (pageNum: number, crop: CropRect | undefined) => {
+    setExportCrops((prev) => {
+      const newMap = new Map(prev)
+      if (crop) {
+        newMap.set(pageNum, crop)
+      } else {
+        newMap.delete(pageNum)
+      }
+      return newMap
+    })
+  }
+
+  const applyCropToAllPages = (crop: CropRect | undefined) => {
+    if (!trimFile) return
+    setExportCrops(
+      crop
+        ? new Map(Array.from({ length: trimFile.pageCount }, (_, i) => [i + 1, crop]))
+        : new Map()
+    )
+  }
+
   const toggleExportPage = (pageNum: number) => {
     setExcludedExportPages((prev) => {
       const newSet = new Set(prev)
@@ -479,7 +537,26 @@ export default function Home() {
             scale *= Math.sqrt(MAX_CANVAS_PIXELS / pixels)
           }
 
-          const canvas = await renderPageToCanvas(page, scale, 'print')
+          const rotation = exportRotations.get(pageNum) || 0
+          let canvas = await renderPageToCanvas(page, scale, 'print', rotation)
+
+          // Crop is stored in unrotated page space; map it onto the rotated render
+          const crop = exportCrops.get(pageNum)
+          if (crop) {
+            const r = rotateRect(crop, rotation)
+            const sx = Math.round(r.x * canvas.width)
+            const sy = Math.round(r.y * canvas.height)
+            const sw = Math.max(1, Math.round(r.w * canvas.width))
+            const sh = Math.max(1, Math.round(r.h * canvas.height))
+            const cropped = document.createElement('canvas')
+            cropped.width = sw
+            cropped.height = sh
+            cropped.getContext('2d')!.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh)
+            canvas.width = 0
+            canvas.height = 0
+            canvas = cropped
+          }
+
           const blob = await new Promise<Blob | null>((resolve) =>
             canvas.toBlob(resolve, mimeType, JPG_QUALITY)
           )
@@ -517,7 +594,27 @@ export default function Home() {
       setError('Failed to export images. File may be corrupted or too large.')
       setIsProcessing(false)
     }
-  }, [trimFile, excludedExportPages, exportFormat, exportDpi])
+  }, [trimFile, excludedExportPages, exportFormat, exportDpi, exportRotations, exportCrops])
+
+  // Crop editor keyboard navigation
+  useEffect(() => {
+    if (cropEditorPage === null || !trimFile) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setCropEditorPage(null)
+      } else if (e.key === 'ArrowRight') {
+        setCropEditorPage((prev) =>
+          prev !== null && prev < trimFile.pageCount ? prev + 1 : prev
+        )
+      } else if (e.key === 'ArrowLeft') {
+        setCropEditorPage((prev) => (prev !== null && prev > 1 ? prev - 1 : prev))
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [cropEditorPage, trimFile])
 
   // Get part number for a page (for visual grouping)
   const getPartForPage = (pageNum: number): number => {
@@ -1105,6 +1202,25 @@ export default function Home() {
                     ))}
                   </div>
                 </div>
+                <div className={styles.exportOptionGroup}>
+                  <span className={styles.exportOptionLabel}>ALL PAGES</span>
+                  <div className={styles.exportOptionButtons}>
+                    <button className={styles.exportOptionBtn} onClick={rotateAllExportPages}>
+                      &#8635; ROTATE
+                    </button>
+                    {(exportRotations.size > 0 || exportCrops.size > 0) && (
+                      <button
+                        className={styles.exportOptionBtn}
+                        onClick={() => {
+                          setExportRotations(new Map())
+                          setExportCrops(new Map())
+                        }}
+                      >
+                        RESET EDITS
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Contact Sheet */}
@@ -1135,6 +1251,12 @@ export default function Home() {
                 <div className={styles.thumbnailContainer}>
                   {trimFile.thumbnails.map((thumb, idx) => {
                     const isExcluded = excludedExportPages.has(thumb.pageNum)
+                    const rotation = exportRotations.get(thumb.pageNum) || 0
+                    const crop = exportCrops.get(thumb.pageNum)
+                    // Shrink quarter-turned pages so they stay inside the thumbnail cell
+                    const fitScale = rotation % 180 !== 0
+                      ? Math.min(thumb.width / thumb.height, thumb.height / thumb.width)
+                      : 1
 
                     return (
                       <div key={thumb.pageNum} className={styles.thumbnailWrapper}>
@@ -1156,13 +1278,60 @@ export default function Home() {
                             }
                           }}
                         >
-                          <img
-                            src={thumb.dataUrl}
-                            alt={`Page ${thumb.pageNum}`}
-                            className={styles.thumbnailImage}
-                          />
+                          <div
+                            className={styles.thumbnailFrame}
+                            style={{ transform: `rotate(${rotation}deg) scale(${fitScale})` }}
+                          >
+                            <img
+                              src={thumb.dataUrl}
+                              alt={`Page ${thumb.pageNum}`}
+                              className={styles.thumbnailImage}
+                            />
+                            {crop && (
+                              <div
+                                className={styles.thumbnailCrop}
+                                style={{
+                                  left: `${crop.x * 100}%`,
+                                  top: `${crop.y * 100}%`,
+                                  width: `${crop.w * 100}%`,
+                                  height: `${crop.h * 100}%`,
+                                }}
+                              />
+                            )}
+                          </div>
                           <div className={styles.thumbnailNumber}>{thumb.pageNum}</div>
+                          {crop && !isExcluded && <div className={styles.thumbnailPart}>CROP</div>}
+                          {rotation !== 0 && !isExcluded && (
+                            <div className={styles.thumbnailRotation}>{rotation}°</div>
+                          )}
                           {isExcluded && <div className={styles.thumbnailDeletedOverlay}>SKIP</div>}
+
+                          {!isExcluded && (
+                            <div className={styles.thumbnailActions}>
+                              <button
+                                className={styles.thumbnailActionBtn}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  rotateExportPage(thumb.pageNum)
+                                }}
+                                title="Rotate 90°"
+                                aria-label={`Rotate page ${thumb.pageNum}`}
+                              >
+                                &#8635;
+                              </button>
+                              <button
+                                className={styles.thumbnailActionBtn}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setCropEditorPage(thumb.pageNum)
+                                }}
+                                title="Crop & rotate"
+                                aria-label={`Crop page ${thumb.pageNum}`}
+                              >
+                                &#9986;
+                              </button>
+                            </div>
+                          )}
                         </motion.div>
                       </div>
                     )
@@ -1192,7 +1361,7 @@ export default function Home() {
               </motion.div>
 
               <div className={styles.cutHint}>
-                <span>&#9758;</span> CLICK PAGES TO INCLUDE OR SKIP
+                <span>&#9758;</span> CLICK PAGES TO INCLUDE OR SKIP • HOVER TO ROTATE OR CROP
               </div>
             </motion.div>
           )}
@@ -1213,6 +1382,105 @@ export default function Home() {
                   <span>.</span><span>.</span><span>.</span>
                 </div>
               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Crop Editor (export mode) */}
+        <AnimatePresence>
+          {mode === 'export' && cropEditorPage !== null && trimFile && (
+            <motion.div
+              className={styles.lightbox}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setCropEditorPage(null)}
+            >
+              <motion.div
+                className={styles.lightboxContent}
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.8, opacity: 0 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className={styles.lightboxHeader}>
+                  <div className={styles.lightboxTitle}>
+                    <span className={styles.lightboxIcon}>&#9986;</span>
+                    CROP &amp; ROTATE
+                  </div>
+                  <button
+                    className={styles.lightboxClose}
+                    onClick={() => setCropEditorPage(null)}
+                    aria-label="Close crop editor"
+                  >
+                    &times;
+                  </button>
+                </div>
+
+                <div className={styles.lightboxImageContainer}>
+                  <CropEditor
+                    key={cropEditorPage}
+                    imageUrl={trimFile.thumbnails[cropEditorPage - 1].dataUrl}
+                    rotation={exportRotations.get(cropEditorPage) || 0}
+                    crop={exportCrops.get(cropEditorPage)}
+                    onChange={(crop) => setExportCrop(cropEditorPage, crop)}
+                  />
+                </div>
+
+                <div className={styles.lightboxActions}>
+                  <button
+                    className={styles.lightboxActionBtn}
+                    onClick={() => rotateExportPage(cropEditorPage)}
+                  >
+                    &#8635; ROTATE
+                  </button>
+                  <button
+                    className={styles.lightboxActionBtn}
+                    onClick={() => setExportCrop(cropEditorPage, undefined)}
+                    disabled={!exportCrops.has(cropEditorPage)}
+                  >
+                    RESET CROP
+                  </button>
+                  <button
+                    className={styles.lightboxActionBtn}
+                    onClick={() => applyCropToAllPages(exportCrops.get(cropEditorPage))}
+                    title="Use this page's crop on every page"
+                  >
+                    APPLY CROP TO ALL
+                  </button>
+                </div>
+
+                <div className={styles.lightboxNav}>
+                  <button
+                    className={styles.lightboxNavBtn}
+                    onClick={() => setCropEditorPage((p) => (p && p > 1 ? p - 1 : p))}
+                    disabled={cropEditorPage <= 1}
+                  >
+                    &#9664; PREV
+                  </button>
+
+                  <div className={styles.lightboxInfo}>
+                    <span className={styles.lightboxPage}>
+                      PAGE {cropEditorPage} OF {trimFile.pageCount}
+                    </span>
+                  </div>
+
+                  <button
+                    className={styles.lightboxNavBtn}
+                    onClick={() =>
+                      setCropEditorPage((p) => (p && p < trimFile.pageCount ? p + 1 : p))
+                    }
+                    disabled={cropEditorPage >= trimFile.pageCount}
+                  >
+                    NEXT &#9654;
+                  </button>
+                </div>
+
+                <div className={styles.lightboxHint}>
+                  DRAG TO DRAW A CROP • DRAG CORNERS TO RESIZE • ESC TO CLOSE
+                </div>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>

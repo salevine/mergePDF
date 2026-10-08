@@ -1304,6 +1304,78 @@
   color: var(--paper-cream);
 }
 
+/* Export thumbnails: rotation + crop preview */
+.thumbnailFrame {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.3s ease;
+}
+
+.thumbnailCrop {
+  position: absolute;
+  outline: 1px dashed var(--ink-red);
+  box-shadow: 0 0 0 9999px rgba(26, 23, 20, 0.45);
+  pointer-events: none;
+}
+
+/* Crop editor */
+.cropStage {
+  position: relative;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  border: 4px solid var(--paper-kraft);
+  box-sizing: content-box;
+  box-shadow:
+    0 0 0 1px var(--paper-brown),
+    0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.cropStageLoading {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--paper-kraft);
+}
+
+.cropImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.cropRect {
+  position: absolute;
+  outline: 2px dashed var(--ink-red);
+  box-shadow: 0 0 0 9999px rgba(26, 23, 20, 0.6);
+  cursor: move;
+}
+
+.cropHandle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--paper-cream);
+  border: 2px solid var(--ink-red);
+}
+
+.cropHandle_nw { top: 0; left: 0; cursor: nwse-resize; }
+.cropHandle_ne { top: 0; right: 0; cursor: nesw-resize; }
+.cropHandle_sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.cropHandle_se { bottom: 0; right: 0; cursor: nwse-resize; }
+
+.lightboxActionBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.lightboxActionBtn:disabled:hover {
+  background: transparent;
+  color: var(--paper-cream);
+}
+
 /* Responsive */
 @media (max-width: 600px) {
   .main {
