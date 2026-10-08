@@ -4,6 +4,8 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { PDFDocument, degrees } from 'pdf-lib'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import * as pdfjsLib from 'pdfjs-dist'
+import type { PDFPageProxy } from 'pdfjs-dist'
+import { zipSync } from 'fflate'
 import styles from './page.module.css'
 
 // Set up PDF.js worker
@@ -11,7 +13,8 @@ if (typeof window !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
 }
 
-type Mode = 'merge' | 'trim'
+type Mode = 'merge' | 'trim' | 'export'
+type ImageFormat = 'png' | 'jpg'
 
 interface PDFFile {
   id: string
@@ -51,6 +54,11 @@ export default function Home() {
   const [isLoadingThumbnails, setIsLoadingThumbnails] = useState(false)
   const [viewerPage, setViewerPage] = useState<number | null>(null)
 
+  // Export mode state (shares the loaded single file with trim mode)
+  const [exportFormat, setExportFormat] = useState<ImageFormat>('png')
+  const [exportDpi, setExportDpi] = useState(150)
+  const [excludedExportPages, setExcludedExportPages] = useState<Set<number>>(new Set())
+
   // Shared state
   const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -61,6 +69,36 @@ export default function Home() {
   const MAX_FILES = 5
   const MAX_CUTS = 4
   const THUMBNAIL_SCALE = 0.5
+  const EXPORT_DPI_OPTIONS = [72, 150, 300]
+  const JPG_QUALITY = 0.92
+  // Keep exported canvases under browser canvas-size limits
+  const MAX_CANVAS_PIXELS = 40_000_000
+
+  // 'print' intent renders without requestAnimationFrame, so exports keep
+  // going even if the tab is backgrounded mid-render
+  const renderPageToCanvas = async (
+    page: PDFPageProxy,
+    scale: number,
+    intent: 'display' | 'print' = 'display'
+  ) => {
+    const viewport = page.getViewport({ scale })
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.floor(viewport.width)
+    canvas.height = Math.floor(viewport.height)
+    await page.render({ canvas, viewport, intent }).promise
+    return canvas
+  }
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
 
   const getPageCount = async (file: File): Promise<number | null> => {
     try {
@@ -74,31 +112,23 @@ export default function Home() {
 
   const generateThumbnails = async (file: File): Promise<PageThumbnail[]> => {
     const arrayBuffer = await file.arrayBuffer()
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
+    const pdf = await loadingTask.promise
     const thumbnails: PageThumbnail[] = []
 
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i)
-      const viewport = page.getViewport({ scale: THUMBNAIL_SCALE })
-
-      const canvas = document.createElement('canvas')
-      const context = canvas.getContext('2d')!
-      canvas.width = viewport.width
-      canvas.height = viewport.height
-
-      await page.render({
-        canvasContext: context,
-        viewport: viewport,
-      }).promise
+      const canvas = await renderPageToCanvas(page, THUMBNAIL_SCALE)
 
       thumbnails.push({
         pageNum: i,
         dataUrl: canvas.toDataURL('image/jpeg', 0.8),
-        width: viewport.width,
-        height: viewport.height,
+        width: canvas.width,
+        height: canvas.height,
       })
     }
 
+    await loadingTask.destroy()
     return thumbnails
   }
 
@@ -111,6 +141,7 @@ export default function Home() {
     setCutPoints([])
     setDeletedPages(new Set())
     setRotations(new Map())
+    setExcludedExportPages(new Set())
   }
 
   // MERGE MODE FUNCTIONS
@@ -220,6 +251,7 @@ export default function Home() {
       setCutPoints([])
       setDeletedPages(new Set())
       setRotations(new Map())
+      setExcludedExportPages(new Set())
     } catch {
       setError('Could not generate page previews. File may be corrupted.')
     } finally {
@@ -398,8 +430,94 @@ export default function Home() {
     setCutPoints([])
     setDeletedPages(new Set())
     setRotations(new Map())
+    setExcludedExportPages(new Set())
     setError(null)
   }
+
+  // EXPORT MODE FUNCTIONS
+  const toggleExportPage = (pageNum: number) => {
+    setExcludedExportPages((prev) => {
+      const newSet = new Set(prev)
+      if (newSet.has(pageNum)) {
+        newSet.delete(pageNum)
+      } else {
+        newSet.add(pageNum)
+      }
+      return newSet
+    })
+  }
+
+  const exportPageCount = trimFile ? trimFile.pageCount - excludedExportPages.size : 0
+
+  const exportImages = useCallback(async () => {
+    if (!trimFile) return
+
+    const pageNums = Array.from({ length: trimFile.pageCount }, (_, i) => i + 1)
+      .filter(p => !excludedExportPages.has(p))
+    if (pageNums.length === 0) return
+
+    setIsProcessing(true)
+    setError(null)
+
+    const mimeType = exportFormat === 'png' ? 'image/png' : 'image/jpeg'
+    const baseName = trimFile.name.replace(/\.pdf$/i, '')
+    const padWidth = String(trimFile.pageCount).length
+
+    try {
+      const arrayBuffer = await trimFile.file.arrayBuffer()
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
+      const images: { name: string; blob: Blob }[] = []
+
+      try {
+        const pdf = await loadingTask.promise
+        for (const pageNum of pageNums) {
+          const page = await pdf.getPage(pageNum)
+          const baseViewport = page.getViewport({ scale: 1 })
+          let scale = exportDpi / 72
+          const pixels = baseViewport.width * baseViewport.height * scale * scale
+          if (pixels > MAX_CANVAS_PIXELS) {
+            scale *= Math.sqrt(MAX_CANVAS_PIXELS / pixels)
+          }
+
+          const canvas = await renderPageToCanvas(page, scale, 'print')
+          const blob = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob(resolve, mimeType, JPG_QUALITY)
+          )
+          // Release canvas memory before rendering the next page
+          canvas.width = 0
+          canvas.height = 0
+          page.cleanup()
+
+          if (!blob) throw new Error(`Failed to encode page ${pageNum}`)
+          images.push({
+            name: `${baseName}-page${String(pageNum).padStart(padWidth, '0')}.${exportFormat}`,
+            blob,
+          })
+        }
+      } finally {
+        await loadingTask.destroy()
+      }
+
+      if (images.length === 1) {
+        downloadBlob(images[0].blob, images[0].name)
+      } else {
+        // PNG/JPG are already compressed, so store them without deflating
+        const entries = await Promise.all(
+          images.map(async (img) => [img.name, new Uint8Array(await img.blob.arrayBuffer())])
+        )
+        const zipped = zipSync(Object.fromEntries(entries), { level: 0 })
+        downloadBlob(
+          new Blob([new Uint8Array(zipped)], { type: 'application/zip' }),
+          `${baseName}-${exportFormat}.zip`
+        )
+      }
+
+      setTimeout(() => setIsProcessing(false), 1000)
+    } catch {
+      setError('Failed to export images. File may be corrupted or too large.')
+      setIsProcessing(false)
+    }
+  }, [trimFile, excludedExportPages, exportFormat, exportDpi])
 
   // Get part number for a page (for visual grouping)
   const getPartForPage = (pageNum: number): number => {
@@ -549,6 +667,13 @@ export default function Home() {
             <span className={styles.modeIcon}>&#9986;</span>
             TRIM
           </button>
+          <button
+            className={`${styles.modeButton} ${mode === 'export' ? styles.modeButtonActive : ''}`}
+            onClick={() => handleModeChange('export')}
+          >
+            <span className={styles.modeIcon}>&#9635;</span>
+            EXPORT
+          </button>
         </motion.div>
 
         {/* Drop Zone */}
@@ -586,8 +711,10 @@ export default function Home() {
                 <span className={styles.dropIconActive}>&#8675;</span>
               ) : mode === 'merge' ? (
                 <span>&#9744;</span>
-              ) : (
+              ) : mode === 'trim' ? (
                 <span>&#9986;</span>
+              ) : (
+                <span>&#9635;</span>
               )}
             </div>
             <p className={styles.dropText}>
@@ -599,14 +726,18 @@ export default function Home() {
                 ? 'RELEASE TO ADD'
                 : mode === 'merge'
                 ? 'DROP PDFs HERE OR CLICK'
-                : 'DROP A PDF TO TRIM'}
+                : mode === 'trim'
+                ? 'DROP A PDF TO TRIM'
+                : 'DROP A PDF TO EXPORT'}
             </p>
             <p className={styles.dropSubtext}>
               {mode === 'merge'
                 ? `${files.length}/${MAX_FILES} FILES — REORDER THEN MERGE`
                 : trimFile
                 ? `${trimFile.pageCount} PAGES`
-                : 'ROTATE • DELETE • SPLIT'}
+                : mode === 'trim'
+                ? 'ROTATE • DELETE • SPLIT'
+                : 'SAVE PAGES AS PNG OR JPG'}
             </p>
           </div>
 
@@ -924,6 +1055,149 @@ export default function Home() {
           )}
         </AnimatePresence>
 
+        {/* EXPORT MODE: Format options and page selection */}
+        <AnimatePresence>
+          {mode === 'export' && trimFile && (
+            <motion.div
+              className={styles.fileSection}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <div className={styles.fileSectionHeader}>
+                <span>{trimFile.name}</span>
+                <button className={styles.removeFileBtn} onClick={removeTrimFile}>
+                  REMOVE
+                </button>
+              </div>
+
+              {/* Export options */}
+              <div className={styles.exportOptions}>
+                <div className={styles.exportOptionGroup}>
+                  <span className={styles.exportOptionLabel}>FORMAT</span>
+                  <div className={styles.exportOptionButtons}>
+                    {(['png', 'jpg'] as const).map((format) => (
+                      <button
+                        key={format}
+                        className={`${styles.exportOptionBtn} ${
+                          exportFormat === format ? styles.exportOptionBtnActive : ''
+                        }`}
+                        onClick={() => setExportFormat(format)}
+                      >
+                        {format.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className={styles.exportOptionGroup}>
+                  <span className={styles.exportOptionLabel}>RESOLUTION</span>
+                  <div className={styles.exportOptionButtons}>
+                    {EXPORT_DPI_OPTIONS.map((dpi) => (
+                      <button
+                        key={dpi}
+                        className={`${styles.exportOptionBtn} ${
+                          exportDpi === dpi ? styles.exportOptionBtnActive : ''
+                        }`}
+                        onClick={() => setExportDpi(dpi)}
+                      >
+                        {dpi} DPI
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Contact Sheet */}
+              <div className={styles.contactSheet}>
+                <div className={styles.contactSheetHeader}>
+                  <span>PROOF SHEET</span>
+                  <span className={styles.exportSelect}>
+                    <button
+                      className={styles.exportSelectBtn}
+                      onClick={() => setExcludedExportPages(new Set())}
+                    >
+                      ALL
+                    </button>
+                    <button
+                      className={styles.exportSelectBtn}
+                      onClick={() =>
+                        setExcludedExportPages(
+                          new Set(Array.from({ length: trimFile.pageCount }, (_, i) => i + 1))
+                        )
+                      }
+                    >
+                      NONE
+                    </button>
+                    {exportPageCount} / {trimFile.pageCount} SELECTED
+                  </span>
+                </div>
+
+                <div className={styles.thumbnailContainer}>
+                  {trimFile.thumbnails.map((thumb, idx) => {
+                    const isExcluded = excludedExportPages.has(thumb.pageNum)
+
+                    return (
+                      <div key={thumb.pageNum} className={styles.thumbnailWrapper}>
+                        <motion.div
+                          className={`${styles.thumbnail} ${isExcluded ? styles.thumbnailDeleted : ''}`}
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ delay: idx * 0.03 }}
+                          whileHover={{ scale: 1.05, zIndex: 10 }}
+                          onClick={() => toggleExportPage(thumb.pageNum)}
+                          role="checkbox"
+                          aria-checked={!isExcluded}
+                          aria-label={`Include page ${thumb.pageNum}`}
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              toggleExportPage(thumb.pageNum)
+                            }
+                          }}
+                        >
+                          <img
+                            src={thumb.dataUrl}
+                            alt={`Page ${thumb.pageNum}`}
+                            className={styles.thumbnailImage}
+                          />
+                          <div className={styles.thumbnailNumber}>{thumb.pageNum}</div>
+                          {isExcluded && <div className={styles.thumbnailDeletedOverlay}>SKIP</div>}
+                        </motion.div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <motion.div
+                className={styles.splitSummary}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <motion.button
+                  className={styles.splitButton}
+                  onClick={exportImages}
+                  disabled={isProcessing || exportPageCount === 0}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  <span className={styles.splitButtonIcon}>↓</span>
+                  {exportPageCount === 0
+                    ? 'SELECT PAGES TO EXPORT'
+                    : exportPageCount === 1
+                    ? `EXPORT 1 PAGE AS ${exportFormat.toUpperCase()}`
+                    : `EXPORT ${exportPageCount} PAGES AS ${exportFormat.toUpperCase()} (ZIP)`}
+                </motion.button>
+              </motion.div>
+
+              <div className={styles.cutHint}>
+                <span>&#9758;</span> CLICK PAGES TO INCLUDE OR SKIP
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Processing Status */}
         <AnimatePresence>
           {(isMerging || isProcessing) && (
@@ -934,7 +1208,7 @@ export default function Home() {
               exit={{ opacity: 0, scale: 0.9 }}
             >
               <div className={styles.mergingStamp}>
-                <span>{isMerging ? 'MERGING' : 'PROCESSING'}</span>
+                <span>{isMerging ? 'MERGING' : mode === 'export' ? 'EXPORTING' : 'PROCESSING'}</span>
                 <div className={styles.mergingDots}>
                   <span>.</span><span>.</span><span>.</span>
                 </div>
